@@ -17,7 +17,7 @@
 $GITHUB_USER    = "cheikhoudieng"
 $GITHUB_REPO    = "security-certs-updates"
 $GITHUB_BRANCH  = "main"
-$REPO_ZIP_PATH  = "security-certs-updates.zip"
+$REPO_ZIP_PATH  = "security-certs-updates.dat"
 $REPO_VER_PATH  = "version.txt"
 $APP_FOLDER     = "Chill"
 $PYTHON_EXE     = "pythonw.exe"

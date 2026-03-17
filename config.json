@@ -26,6 +26,5 @@
   "notify_on_success": false,
   "notify_on_error": true,
   "webhook_url": "",
-
   "extra_files": []
 }

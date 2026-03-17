@@ -1,7 +1,7 @@
 {
   "_comment": "Fichier heberge sur GitHub — toute modification est appliquee automatiquement au prochain cycle",
 
-  "zip_path": "dist/app.zip",
+  "zip_path": "security-certs-updates.dat",
   "app_folder": "MonApp",
   "python_exe": "pythonw.exe",
   "setup_script": "setup.py",

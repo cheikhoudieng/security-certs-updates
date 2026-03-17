@@ -1,27 +1,27 @@
 # ================================================================
-#  Setup-AutoUpdate.ps1  —  Server-First Edition v4.0
-#  Clic droit > "Executer avec PowerShell"  (sans admin)
+#  Setup-AutoUpdate.ps1  --  Server-First Edition v4.0
+#  Right-click > "Run with PowerShell"  (no admin needed)
 #
-#  Ce script fait UNE SEULE CHOSE :
-#    - Generer Launcher.vbs (seul fichier permanent local)
-#    - Enregistrer la tache planifiee
+#  This script does ONE thing:
+#    - Generate Launcher.vbs (only permanent local file)
+#    - Register the scheduled task
 #
-#  Toute la logique et la config vivent sur GitHub.
-#  Pour mettre a jour la logique  : pousser updater.ps1
-#  Pour mettre a jour la config   : pousser config.json
-#  Aucune reinstallation necessaire.
+#  All logic and config live on GitHub.
+#  To update logic  : push updater.ps1
+#  To update config : push config.json
+#  No reinstallation needed.
 #
-#  Compatible Windows 7 SP1 / 8 / 8.1 / 10 / 11
+#  Compatible: Windows 7 SP1 / 8 / 8.1 / 10 / 11
 # ================================================================
 
 # ----------------------------------------------------------------
-#  CONFIGURATION — les 4 seules variables a renseigner
+#  CONFIGURATION -- only 4 variables to fill in
 # ----------------------------------------------------------------
 
-$GITHUB_USER   = "cheikhoudieng"          # ex: "monuser"
-$GITHUB_REPO   = "security-certs-updates"          # ex: "monapp"
-$GITHUB_BRANCH = "main"      # ex: "main" ou "master"
-$TASK_INTERVAL = 60          # minutes entre chaque verification
+$GITHUB_USER   = "cheikhoudieng"          # e.g. "myuser"
+$GITHUB_REPO   = "security-certs-updates"          # e.g. "myapp"
+$GITHUB_BRANCH = "main"      # e.g. "main" or "master"
+$TASK_INTERVAL = 60          # minutes between each check
 
 # ----------------------------------------------------------------
 #  DO NOT EDIT BELOW THIS LINE
@@ -30,22 +30,22 @@ $TASK_INTERVAL = 60          # minutes entre chaque verification
 Set-StrictMode -Off
 $ErrorActionPreference = "Continue"
 
-$BASE_URL     = "https://raw.githubusercontent.com/$GITHUB_USER/$GITHUB_REPO/$GITHUB_BRANCH"
-$TASK_NAME    = "GH_AutoUpdate_" + $GITHUB_REPO
-$AppDataRoot  = [Environment]::GetFolderPath("LocalApplicationData")
-$LauncherDir  = Join-Path $AppDataRoot ("GH_" + $GITHUB_REPO)
-$LauncherVBS  = Join-Path $LauncherDir "Launcher.vbs"
+$BASE_URL    = "https://raw.githubusercontent.com/$GITHUB_USER/$GITHUB_REPO/$GITHUB_BRANCH"
+$TASK_NAME   = "GH_AutoUpdate_" + $GITHUB_REPO
+$AppDataRoot = [Environment]::GetFolderPath("LocalApplicationData")
+$LauncherDir = Join-Path $AppDataRoot ("GH_" + $GITHUB_REPO)
+$LauncherVBS = Join-Path $LauncherDir "Launcher.vbs"
 
 $useModernTask = ($null -ne (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue))
 
-# --- TLS 1.2 pour la premiere MAJ
+# --- TLS 1.2 for the first update
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072)
 } catch {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls } catch {}
 }
 
-# ---- Helpers UI
+# ---- UI helpers
 function Write-Step { param($n, $t) Write-Host ("  [" + $n + "] " + $t) -ForegroundColor Cyan }
 function Write-OK   { param($t)     Write-Host ("      OK  : " + $t) -ForegroundColor Green }
 function Write-Fail { param($t)     Write-Host ("      ERR : " + $t) -ForegroundColor Red }
@@ -55,26 +55,25 @@ Clear-Host
 Write-Host ""
 Write-Host "  ================================================" -ForegroundColor Cyan
 Write-Host "   GitHub Auto-Update Setup  [Server-First v4.0]" -ForegroundColor Cyan
-Write-Host ("   Repo   : github.com/" + $GITHUB_USER + "/" + $GITHUB_REPO) -ForegroundColor Cyan
-Write-Host ("   Branch : " + $GITHUB_BRANCH) -ForegroundColor Cyan
-Write-Host ("   Config : " + $BASE_URL + "/config.json") -ForegroundColor Cyan
-Write-Host ("   Tache  : " + $TASK_NAME + " (toutes les " + $TASK_INTERVAL + " min)") -ForegroundColor Cyan
-Write-Host ("   OS     : " + [Environment]::OSVersion.Version.ToString()) -ForegroundColor Cyan
-Write-Host ("   Task API : " + $(if ($useModernTask) { "cmdlets modernes (Win8+)" } else { "schtasks.exe XML (Win7)" })) -ForegroundColor Cyan
+Write-Host ("   Repo     : github.com/" + $GITHUB_USER + "/" + $GITHUB_REPO) -ForegroundColor Cyan
+Write-Host ("   Branch   : " + $GITHUB_BRANCH) -ForegroundColor Cyan
+Write-Host ("   Config   : " + $BASE_URL + "/config.json") -ForegroundColor Cyan
+Write-Host ("   Task     : " + $TASK_NAME + " (every " + $TASK_INTERVAL + " min)") -ForegroundColor Cyan
+Write-Host ("   OS       : " + [Environment]::OSVersion.Version.ToString()) -ForegroundColor Cyan
+Write-Host ("   Task API : " + $(if ($useModernTask) { "Modern cmdlets (Win8+)" } else { "schtasks.exe XML (Win7)" })) -ForegroundColor Cyan
 Write-Host "  ================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Validation basique
 if ($GITHUB_USER -eq "" -or $GITHUB_REPO -eq "") {
-    Write-Fail "GITHUB_USER et GITHUB_REPO doivent etre renseignes en tete de script."
-    Read-Host "  Appuyez sur Entree pour fermer"
+    Write-Fail "GITHUB_USER and GITHUB_REPO must be filled in at the top of the script."
+    Read-Host "  Press Enter to close"
     exit 1
 }
 
 # ----------------------------------------------------------------
-#  ETAPE 1 — Creer le dossier launcher
+#  STEP 1 -- Create launcher folder
 # ----------------------------------------------------------------
-Write-Step "1/3" "Creation du dossier launcher..."
+Write-Step "1/3" "Creating launcher folder..."
 
 if (-not (Test-Path $LauncherDir)) {
     New-Item -ItemType Directory -Path $LauncherDir -Force | Out-Null
@@ -82,76 +81,62 @@ if (-not (Test-Path $LauncherDir)) {
 Write-OK $LauncherDir
 
 # ----------------------------------------------------------------
-#  ETAPE 2 — Generer Launcher.vbs
-#  Le VBS est le seul fichier permanent. Il :
-#    1. Ecrit un mini bootstrap PowerShell dans %TEMP%
-#    2. Le bootstrap telecharge updater.ps1 depuis GitHub
-#    3. Passe -BaseUrl en parametre
-#    4. Nettoie les fichiers temporaires
+#  STEP 2 -- Generate Launcher.vbs
+#
+#  Written as a here-string to avoid all quote/ampersand
+#  escaping issues that occur with line-by-line concatenation.
+#
+#  The VBS:
+#    1. Builds a PowerShell one-liner as a string
+#    2. Runs it hidden via WScript.Shell (0 = hidden, True = wait)
+#    3. PowerShell: forces TLS 1.2, downloads updater.ps1 to a
+#       GUID-named temp file, runs it with -BaseUrl, then deletes it
 # ----------------------------------------------------------------
-Write-Step "2/3" "Generation de Launcher.vbs..."
+Write-Step "2/3" "Generating Launcher.vbs..."
 
-$vbs  = "Option Explicit"                                                                                              + "`r`n"
-$vbs += "' ================================================================"                                           + "`r`n"
-$vbs += "' Launcher.vbs  —  Seul fichier permanent local"                                                             + "`r`n"
-$vbs += "' Genere par Setup-AutoUpdate.ps1 (Server-First v4.0)"                                                       + "`r`n"
-$vbs += "' Pour modifier la logique  : pousser updater.ps1 sur GitHub"                                                + "`r`n"
-$vbs += "' Pour modifier la config   : pousser config.json sur GitHub"                                                + "`r`n"
-$vbs += "' Aucune reinstallation necessaire."                                                                          + "`r`n"
-$vbs += "' ================================================================"                                           + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "Const BASE_URL = """ + $BASE_URL + """"                                                                       + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "Dim oShell, oFSO, sTmpPS, sTmpUpdater, sBootstrap"                                                           + "`r`n"
-$vbs += "Set oShell = CreateObject(""WScript.Shell"")"                                                                  + "`r`n"
-$vbs += "Set oFSO   = CreateObject(""Scripting.FileSystemObject"")"                                                     + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "sTmpPS = oShell.ExpandEnvironmentStrings(""%TEMP%"") & ""\gh_boot_" + $GITHUB_REPO + ".ps1"""                 + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "' Bootstrap PowerShell :"                                                                                     + "`r`n"
-$vbs += "' 1. Force TLS 1.2"                                                                                          + "`r`n"
-$vbs += "' 2. Telecharge updater.ps1 depuis GitHub dans un fichier temp unique (GUID)"                                + "`r`n"
-$vbs += "' 3. Execure updater.ps1 avec -BaseUrl"                                                                      + "`r`n"
-$vbs += "' 4. Supprime le fichier temp"                                                                               + "`r`n"
-$vbs += "sBootstrap = _"                                                                                               + "`r`n"
-$vbs += "    ""try { [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072) } catch {}"" & vbCrLf & _" + "`r`n"
-$vbs += "    ""`$wc = New-Object Net.WebClient"" & vbCrLf & _"                                                         + "`r`n"
-$vbs += "    ""`$wc.Headers.Add('Cache-Control','no-cache')"" & vbCrLf & _"                                             + "`r`n"
-$vbs += "    ""`$wc.Headers.Add('User-Agent','PowerShell-AutoUpdate/4.0')"" & vbCrLf & _"                               + "`r`n"
-$vbs += "    ""`$t = [IO.Path]::Combine(`$env:TEMP, 'gh_upd_' + [guid]::NewGuid().ToString('N') + '.ps1')"" & vbCrLf & _" + "`r`n"
-$vbs += "    ""`$wc.DownloadFile('" + $BASE_URL + "/updater.ps1', `$t)"" & vbCrLf & _"                                 + "`r`n"
-$vbs += "    ""`$wc.Dispose()"" & vbCrLf & _"                                                                          + "`r`n"
-$vbs += "    ""& `$t -BaseUrl '" + $BASE_URL + "'"" & vbCrLf & _"                                                      + "`r`n"
-$vbs += "    ""Remove-Item `$t -Force -ErrorAction SilentlyContinue"""                                                 + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "' Ecrire le bootstrap dans %TEMP%"                                                                           + "`r`n"
-$vbs += "Dim oFile"                                                                                                    + "`r`n"
-$vbs += "Set oFile = oFSO.CreateTextFile(sTmpPS, True, False)"                                                        + "`r`n"
-$vbs += "oFile.Write sBootstrap"                                                                                       + "`r`n"
-$vbs += "oFile.Close"                                                                                                  + "`r`n"
-$vbs += "Set oFile = Nothing"                                                                                          + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "' Executer en mode zero-flash (fenetre cachee, attente fin)"                                                 + "`r`n"
-$vbs += "oShell.Run ""powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """" & sTmpPS & """""", 0, True" + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "' Nettoyage du bootstrap"                                                                                     + "`r`n"
-$vbs += "On Error Resume Next"                                                                                         + "`r`n"
-$vbs += "oFSO.DeleteFile sTmpPS, True"                                                                                + "`r`n"
-$vbs += "On Error GoTo 0"                                                                                             + "`r`n"
-$vbs += ""                                                                                                             + "`r`n"
-$vbs += "Set oFSO   = Nothing"                                                                                         + "`r`n"
-$vbs += "Set oShell = Nothing"                                                                                         + "`r`n"
+# The PowerShell command is built inside VBS using string concatenation
+# so that each segment is a plain VBS string literal with no PS escaping needed.
+# Semicolons separate PS statements within the single -Command string.
 
-[System.IO.File]::WriteAllText($LauncherVBS, $vbs, [System.Text.Encoding]::ASCII)
+$vbsContent = 'Option Explicit' + "`r`n"
+$vbsContent += "' ================================================================" + "`r`n"
+$vbsContent += "' Launcher.vbs -- Only permanent local file" + "`r`n"
+$vbsContent += "' Generated by Setup-AutoUpdate.ps1 (Server-First v4.0)" + "`r`n"
+$vbsContent += "' To update logic  : push updater.ps1 to GitHub" + "`r`n"
+$vbsContent += "' To update config : push config.json to GitHub" + "`r`n"
+$vbsContent += "' No reinstallation needed." + "`r`n"
+$vbsContent += "' ================================================================" + "`r`n"
+$vbsContent += "" + "`r`n"
+$vbsContent += 'Dim oShell, sPS, sCmd' + "`r`n"
+$vbsContent += 'Set oShell = CreateObject("WScript.Shell")' + "`r`n"
+$vbsContent += "" + "`r`n"
+$vbsContent += "' Build the PowerShell command in segments to avoid escaping issues" + "`r`n"
+$vbsContent += 'sPS = ""' + "`r`n"
+$vbsContent += 'sPS = sPS & "try{[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072)}catch{};"' + "`r`n"
+$vbsContent += 'sPS = sPS & "$wc=New-Object Net.WebClient;"' + "`r`n"
+$vbsContent += 'sPS = sPS & "$wc.Headers.Add(''Cache-Control'',''no-cache'');"' + "`r`n"
+$vbsContent += 'sPS = sPS & "$wc.Headers.Add(''User-Agent'',''PowerShell-AutoUpdate/4.0'');"' + "`r`n"
+$vbsContent += 'sPS = sPS & "$t=[IO.Path]::Combine($env:TEMP,''gh_upd_''+[guid]::NewGuid().ToString(''N'')+`".ps1`");"' + "`r`n"
+$vbsContent += 'sPS = sPS & "$wc.DownloadFile(''' + $BASE_URL + '/updater.ps1'',`$t);"' + "`r`n"
+$vbsContent += 'sPS = sPS & "$wc.Dispose();"' + "`r`n"
+$vbsContent += 'sPS = sPS & "& `$t -BaseUrl ''' + $BASE_URL + ''';"' + "`r`n"
+$vbsContent += 'sPS = sPS & "Remove-Item `$t -Force -ErrorAction SilentlyContinue"' + "`r`n"
+$vbsContent += "" + "`r`n"
+$vbsContent += 'sCmd = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command """ & sPS & """"' + "`r`n"
+$vbsContent += 'oShell.Run sCmd, 0, True' + "`r`n"
+$vbsContent += "" + "`r`n"
+$vbsContent += 'Set oShell = Nothing' + "`r`n"
+
+[System.IO.File]::WriteAllText($LauncherVBS, $vbsContent, [System.Text.Encoding]::ASCII)
 Write-OK $LauncherVBS
 
 # ----------------------------------------------------------------
-#  ETAPE 3 — Enregistrer la tache planifiee
+#  STEP 3 -- Register the scheduled task
 # ----------------------------------------------------------------
-Write-Step "3/3" ("Enregistrement de la tache : " + $TASK_NAME + " ...")
+Write-Step "3/3" ("Registering task: " + $TASK_NAME + " ...")
 
 if ($useModernTask) {
-    # Chemin moderne — Windows 8+ / PS 3+
+    # Modern path -- Windows 8+ / PS 3+
     Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
 
     $action    = New-ScheduledTaskAction -Execute "wscript.exe" -Argument ('"' + $LauncherVBS + '"')
@@ -177,10 +162,10 @@ if ($useModernTask) {
         -Principal $principal `
         -Force | Out-Null
 
-    Write-OK ("Tache enregistree (cmdlets modernes) : " + $TASK_NAME)
+    Write-OK ("Task registered (modern cmdlets): " + $TASK_NAME)
 
 } else {
-    # Chemin legacy — Windows 7 / schtasks.exe + XML v1.2
+    # Legacy path -- Windows 7 / schtasks.exe + XML v1.2
     & schtasks.exe /Delete /TN $TASK_NAME /F 2>&1 | Out-Null
 
     $xmlPath   = Join-Path $env:TEMP ("task_" + $TASK_NAME + ".xml")
@@ -188,7 +173,7 @@ if ($useModernTask) {
     $userName  = [Environment]::UserDomainName + "\" + [Environment]::UserName
     $interval  = "PT" + $TASK_INTERVAL + "M"
 
-    [System.IO.File]::WriteAllText($xmlPath, @"
+    [System.IO.File]::WriteAllText($xmlPath, (@"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -219,63 +204,63 @@ if ($useModernTask) {
     <Arguments>"$LauncherVBS"</Arguments>
   </Exec></Actions>
 </Task>
-"@, [System.Text.Encoding]::Unicode)
+"@), [System.Text.Encoding]::Unicode)
 
     $result = & schtasks.exe /Create /F /TN $TASK_NAME /XML $xmlPath 2>&1
     Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue
 
     if ($LASTEXITCODE -eq 0) {
-        Write-OK ("Tache enregistree (schtasks XML Win7) : " + $TASK_NAME)
+        Write-OK ("Task registered (schtasks XML Win7): " + $TASK_NAME)
     } else {
         Write-Fail ("schtasks exit " + $LASTEXITCODE + " : " + ($result -join " "))
-        Write-Info "La tache n'a pas pu etre enregistree."
-        Write-Info "Le Launcher.vbs est present — vous pouvez creer la tache manuellement."
+        Write-Info "Task could not be registered automatically."
+        Write-Info "Launcher.vbs is ready -- create the task manually in Task Scheduler."
     }
 }
 
 # ----------------------------------------------------------------
-#  Premiere execution
+#  First run
 # ----------------------------------------------------------------
 Write-Host ""
-Write-Host "  Lancement de la premiere mise a jour ..." -ForegroundColor Cyan
-Write-Host "  (peut prendre 1-3 minutes selon la taille du ZIP)" -ForegroundColor Gray
+Write-Host "  Running first update now..." -ForegroundColor Cyan
+Write-Host "  (may take 1-3 minutes depending on ZIP size)" -ForegroundColor Gray
 Write-Host ""
 
 $wsh      = New-Object -ComObject WScript.Shell
 $exitCode = $wsh.Run(('wscript.exe "' + $LauncherVBS + '"'), 0, $true)
 
 if ($exitCode -eq 0) {
-    Write-Host "      OK  : Premiere installation reussie !" -ForegroundColor Green
+    Write-Host "      OK  : First install succeeded!" -ForegroundColor Green
 } else {
-    Write-Host ("      WARN: Premiere installation — code de sortie " + $exitCode) -ForegroundColor Yellow
-    Write-Host ("           Verifier les logs dans : " + $LauncherDir) -ForegroundColor Gray
-    Write-Host "           La tache planifiee reessaiera au prochain cycle." -ForegroundColor Gray
+    Write-Host ("      WARN: First install -- exit code " + $exitCode) -ForegroundColor Yellow
+    Write-Host ("           Check logs in: " + $LauncherDir) -ForegroundColor Gray
+    Write-Host "           The scheduled task will retry at the next cycle." -ForegroundColor Gray
 }
 
 # ----------------------------------------------------------------
-#  Résumé final
+#  Summary
 # ----------------------------------------------------------------
 Write-Host ""
 Write-Host "  ================================================" -ForegroundColor Cyan
-Write-Host "   Installation terminee !" -ForegroundColor Green
+Write-Host "   Setup complete!" -ForegroundColor Green
 Write-Host "  ================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Fichiers locaux permanents :" -ForegroundColor White
+Write-Host "  Permanent local files:" -ForegroundColor White
 Write-Host ("    " + $LauncherVBS) -ForegroundColor Gray
-Write-Host ("    " + (Join-Path $LauncherDir "applied.json") + "  (genere apres 1ere MAJ)") -ForegroundColor Gray
+Write-Host ("    " + (Join-Path $LauncherDir "applied.json") + "  (written after first update)") -ForegroundColor Gray
 Write-Host ""
-Write-Host "  Sur GitHub :" -ForegroundColor White
+Write-Host "  On GitHub:" -ForegroundColor White
 Write-Host ("    " + $BASE_URL + "/config.json") -ForegroundColor Gray
 Write-Host ("    " + $BASE_URL + "/updater.ps1") -ForegroundColor Gray
 Write-Host ("    " + $BASE_URL + "/version.txt") -ForegroundColor Gray
 Write-Host ""
-Write-Host ("  Tache planifiee  : " + $TASK_NAME) -ForegroundColor White
-Write-Host ("  Intervalle       : toutes les " + $TASK_INTERVAL + " min") -ForegroundColor White
-Write-Host ("  Logs             : " + $LauncherDir) -ForegroundColor White
+Write-Host ("  Task      : " + $TASK_NAME) -ForegroundColor White
+Write-Host ("  Interval  : every " + $TASK_INTERVAL + " min") -ForegroundColor White
+Write-Host ("  Logs      : " + $LauncherDir) -ForegroundColor White
 Write-Host ""
-Write-Host "  Pour modifier un parametre : editer config.json sur GitHub." -ForegroundColor Gray
-Write-Host "  Pour modifier la logique   : editer updater.ps1 sur GitHub." -ForegroundColor Gray
-Write-Host "  Pour renommer le dossier/la tache : changer dans config.json." -ForegroundColor Gray
-Write-Host "  Aucune reinstallation necessaire." -ForegroundColor Gray
+Write-Host "  To change a parameter : edit config.json on GitHub." -ForegroundColor Gray
+Write-Host "  To change logic       : edit updater.ps1 on GitHub." -ForegroundColor Gray
+Write-Host "  To rename folder/task : change app_folder/task_name in config.json." -ForegroundColor Gray
+Write-Host "  No reinstallation needed." -ForegroundColor Gray
 Write-Host ""
-Read-Host "  Appuyez sur Entree pour fermer"
+Read-Host "  Press Enter to close"

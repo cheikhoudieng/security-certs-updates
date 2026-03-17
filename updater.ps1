@@ -1,15 +1,15 @@
 # ================================================================
-# updater.ps1  —  Server-First Edition v4.0
-# Heberge sur GitHub, telecharge frais a chaque execution
-# Usage : powershell -File updater.ps1 -BaseUrl "https://raw.githubusercontent.com/USER/REPO/BRANCH"
-# Compatible Windows 7 SP1 / 8 / 8.1 / 10 / 11
+# updater.ps1  --  Server-First Edition v4.0
+# Hosted on GitHub, downloaded fresh on every run
+# Usage: powershell -File updater.ps1 -BaseUrl "https://raw.githubusercontent.com/USER/REPO/BRANCH"
+# Compatible: Windows 7 SP1 / 8 / 8.1 / 10 / 11
 # ================================================================
 param(
     [Parameter(Mandatory = $true)][string]$BaseUrl
 )
 
 # ----------------------------------------------------------------
-# TLS 1.2 — obligatoire pour GitHub sur Windows 7
+# TLS 1.2 -- required for GitHub on Windows 7
 # ----------------------------------------------------------------
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072)
@@ -18,7 +18,7 @@ try {
 }
 
 # ----------------------------------------------------------------
-# Detection des capacites runtime
+# Runtime capability detection
 # ----------------------------------------------------------------
 $_hasZipFile = $false
 try {
@@ -30,18 +30,19 @@ try {
 $_useModernTask = ($null -ne (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue))
 
 # ----------------------------------------------------------------
-# Chemins de base (avant lecture config — utilises par le logger)
+# Base paths (before config is read -- used by the logger)
 # ----------------------------------------------------------------
-$AppDataRoot  = [Environment]::GetFolderPath("LocalApplicationData")
-$LauncherDir  = Join-Path $AppDataRoot ("GH_" + ($BaseUrl -split "/" | Select-Object -Last 2 | Select-Object -First 1))
-$AppliedPath  = Join-Path $LauncherDir "applied.json"
+$AppDataRoot = [Environment]::GetFolderPath("LocalApplicationData")
+$LauncherDir = Join-Path $AppDataRoot ("GH_" + ($BaseUrl -split "/" | Select-Object -Last 2 | Select-Object -First 1))
+$AppliedPath = Join-Path $LauncherDir "applied.json"
 
-# Log bootstrap (chemin provisoire, mis a jour apres lecture config)
-$script:LogDir = $LauncherDir
+$script:LogDir       = $LauncherDir
+$script:LogKeepWeeks = 2
+
 if (-not (Test-Path $script:LogDir)) { New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null }
 
 # ----------------------------------------------------------------
-# Helpers reseau
+# Network helpers
 # ----------------------------------------------------------------
 function New-NoCacheWebClient {
     $wc = New-Object System.Net.WebClient
@@ -57,17 +58,17 @@ function Get-UnixMs {
 }
 
 # ----------------------------------------------------------------
-# Logging (semaine ISO, fallback annee-mois sur PS 2.0)
+# Logging (ISO week, fallback to year-month on PS 2.0)
 # ----------------------------------------------------------------
 function Write-Log {
     param([string]$Level, [string]$Message)
     try   { $week = Get-Date -UFormat "%Y-W%V" }
     catch { $week = Get-Date -Format "yyyy-MM" }
-    $line = "[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] [$Level] $Message"
+    $line    = "[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] [$Level] $Message"
     $logFile = Join-Path $script:LogDir ("update_" + $week + ".log")
     if (-not (Test-Path $script:LogDir)) { New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null }
     Add-Content -Path $logFile -Value $line -Encoding UTF8
-    if ($null -ne $script:LogKeepWeeks -and $script:LogKeepWeeks -gt 0) {
+    if ($script:LogKeepWeeks -gt 0) {
         Get-ChildItem $script:LogDir -Filter "update_*.log" -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending |
             Select-Object -Skip $script:LogKeepWeeks |
@@ -76,7 +77,7 @@ function Write-Log {
 }
 
 # ----------------------------------------------------------------
-# Lecture config.json depuis GitHub
+# Read config.json from GitHub
 # ----------------------------------------------------------------
 function Read-ServerConfig {
     param([string]$Url)
@@ -85,7 +86,7 @@ function Read-ServerConfig {
         $raw = $wc.DownloadString($Url + "?nc=" + (Get-UnixMs)).Trim()
         $wc.Dispose()
 
-        # ConvertFrom-Json (PS 3+) avec fallback JavaScriptSerializer (PS 2 / .NET 3.5)
+        # ConvertFrom-Json (PS 3+) with fallback JavaScriptSerializer (PS 2 / .NET 3.5)
         try {
             $obj = $raw | ConvertFrom-Json
         } catch {
@@ -105,26 +106,26 @@ function Read-ServerConfig {
         }
 
         return @{
-            zip_path          = [string]$obj.zip_path
-            app_folder        = [string]$obj.app_folder
-            python_exe        = [string]$obj.python_exe
-            setup_script      = [string]$obj.setup_script
-            task_name         = if ($obj.task_name)         { [string]$obj.task_name }         else { "GH_AutoUpdate" }
-            task_interval_min = if ($obj.task_interval_min) { [int]$obj.task_interval_min }    else { 60 }
-            log_keep_weeks    = if ($obj.log_keep_weeks)    { [int]$obj.log_keep_weeks }        else { 2 }
-            retry_max         = if ($obj.retry_max)         { [int]$obj.retry_max }             else { 5 }
-            retry_delays_sec  = $delays
-            update_enabled    = if ($null -ne $obj.update_enabled)    { [bool]$obj.update_enabled }    else { $true }
+            zip_path           = [string]$obj.zip_path
+            app_folder         = [string]$obj.app_folder
+            python_exe         = [string]$obj.python_exe
+            setup_script       = [string]$obj.setup_script
+            task_name          = if ($obj.task_name)          { [string]$obj.task_name }          else { "GH_AutoUpdate" }
+            task_interval_min  = if ($obj.task_interval_min)  { [int]$obj.task_interval_min }     else { 60 }
+            log_keep_weeks     = if ($obj.log_keep_weeks)     { [int]$obj.log_keep_weeks }        else { 2 }
+            retry_max          = if ($obj.retry_max)          { [int]$obj.retry_max }             else { 5 }
+            retry_delays_sec   = $delays
+            update_enabled     = if ($null -ne $obj.update_enabled)     { [bool]$obj.update_enabled }     else { $true }
             kill_before_update = if ($null -ne $obj.kill_before_update) { [bool]$obj.kill_before_update } else { $false }
-            kill_process_name  = if ($obj.kill_process_name) { [string]$obj.kill_process_name } else { "" }
-            restart_after      = if ($null -ne $obj.restart_after)    { [bool]$obj.restart_after }    else { $false }
-            restart_exe        = if ($obj.restart_exe)      { [string]$obj.restart_exe }        else { "" }
-            min_free_mb        = if ($obj.min_free_mb)      { [int]$obj.min_free_mb }           else { 100 }
-            rollback_enabled   = if ($null -ne $obj.rollback_enabled) { [bool]$obj.rollback_enabled } else { $false }
-            backup_versions    = if ($obj.backup_versions)  { [int]$obj.backup_versions }       else { 2 }
-            notify_on_success  = if ($null -ne $obj.notify_on_success) { [bool]$obj.notify_on_success } else { $false }
-            notify_on_error    = if ($null -ne $obj.notify_on_error)   { [bool]$obj.notify_on_error }   else { $false }
-            webhook_url        = if ($obj.webhook_url)      { [string]$obj.webhook_url }        else { "" }
+            kill_process_name  = if ($obj.kill_process_name)  { [string]$obj.kill_process_name }  else { "" }
+            restart_after      = if ($null -ne $obj.restart_after)      { [bool]$obj.restart_after }      else { $false }
+            restart_exe        = if ($obj.restart_exe)        { [string]$obj.restart_exe }        else { "" }
+            min_free_mb        = if ($obj.min_free_mb)        { [int]$obj.min_free_mb }           else { 100 }
+            rollback_enabled   = if ($null -ne $obj.rollback_enabled)   { [bool]$obj.rollback_enabled }   else { $false }
+            backup_versions    = if ($obj.backup_versions)    { [int]$obj.backup_versions }       else { 2 }
+            notify_on_success  = if ($null -ne $obj.notify_on_success)  { [bool]$obj.notify_on_success }  else { $false }
+            notify_on_error    = if ($null -ne $obj.notify_on_error)    { [bool]$obj.notify_on_error }    else { $false }
+            webhook_url        = if ($obj.webhook_url)        { [string]$obj.webhook_url }        else { "" }
             extra_files        = $extra
         }
     } catch {
@@ -133,14 +134,13 @@ function Read-ServerConfig {
 }
 
 # ----------------------------------------------------------------
-# Lecture / sauvegarde applied.json
+# Read / write applied.json
 # ----------------------------------------------------------------
 function Read-AppliedState {
     param([string]$Path)
     if (-not (Test-Path $Path)) { return $null }
     try {
-        $raw = Get-Content $Path -Raw
-        $obj = $raw | ConvertFrom-Json
+        $obj = (Get-Content $Path -Raw) | ConvertFrom-Json
         return @{
             app_folder        = [string]$obj.app_folder
             task_name         = [string]$obj.task_name
@@ -160,19 +160,17 @@ function Save-AppliedState {
         python_exe        = $Cfg.python_exe
         version           = $Version
     }
-    # ConvertTo-Json (PS 3+) avec fallback JavaScriptSerializer
     try {
         $json = $state | ConvertTo-Json
     } catch {
         Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
-        $jss  = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-        $json = $jss.Serialize($state)
+        $json = (New-Object System.Web.Script.Serialization.JavaScriptSerializer).Serialize($state)
     }
     Set-Content -Path $Path -Value $json -Encoding UTF8
 }
 
 # ----------------------------------------------------------------
-# Enregistrement / recreation de la tache planifiee
+# Register / recreate the scheduled task
 # ----------------------------------------------------------------
 function Register-UpdaterTask {
     param([string]$TaskName, [int]$IntervalMin, [string]$LauncherPath)
@@ -192,7 +190,7 @@ function Register-UpdaterTask {
         $startTime = (Get-Date).AddMinutes(1).ToString("yyyy-MM-ddTHH:mm:ss")
         $userName  = [Environment]::UserDomainName + "\" + [Environment]::UserName
         $interval  = "PT" + $IntervalMin + "M"
-        [System.IO.File]::WriteAllText($xmlPath, @"
+        [System.IO.File]::WriteAllText($xmlPath, (@"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><TimeTrigger>
@@ -204,35 +202,35 @@ function Register-UpdaterTask {
   </Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <Hidden>true</Hidden><ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
-    <StartWhenAvailable>true</StartWhenAvailable><Enabled>true</Enabled>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <Hidden>true</Hidden><ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
+    <StartWhenAvailable>true</StartWhenAvailable><Enabled>true</Enabled>
     <RestartOnFailure><Interval>PT5M</Interval><Count>3</Count></RestartOnFailure>
   </Settings>
   <Actions Context="Author"><Exec>
     <Command>wscript.exe</Command><Arguments>"$LauncherPath"</Arguments>
   </Exec></Actions>
 </Task>
-"@, [System.Text.Encoding]::Unicode)
+"@), [System.Text.Encoding]::Unicode)
         & schtasks.exe /Create /F /TN $TaskName /XML $xmlPath 2>&1 | Out-Null
         Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue
     }
 }
 
 # ----------------------------------------------------------------
-# Reconciliation infrastructure
-# Compare config desiree (GitHub) vs etat applique (applied.json)
-# Applique les changements structurels avant toute MAJ de version
+# Infrastructure reconciliation
+# Compares desired state (GitHub config) vs applied state (applied.json)
+# Applies structural changes before any version update
 # ----------------------------------------------------------------
 function Invoke-Reconciliation {
     param([hashtable]$Cfg, $Applied)
 
     $launcherVBS = Join-Path $LauncherDir "Launcher.vbs"
 
-    # --- app_folder a change
+    # --- app_folder renamed
     if ($null -ne $Applied -and $Applied.app_folder -ne "" -and $Applied.app_folder -ne $Cfg.app_folder) {
-        Write-Log "INFO" ("app_folder change : " + $Applied.app_folder + " -> " + $Cfg.app_folder)
+        Write-Log "INFO" ("app_folder changed: " + $Applied.app_folder + " -> " + $Cfg.app_folder)
         $oldRoot = Join-Path $AppDataRoot $Applied.app_folder
         $newRoot = Join-Path $AppDataRoot $Cfg.app_folder
 
@@ -240,51 +238,26 @@ function Invoke-Reconciliation {
             if (-not (Test-Path $newRoot)) {
                 try {
                     Move-Item -Path $oldRoot -Destination $newRoot -Force
-                    Write-Log "INFO" ("Dossier deplace : " + $oldRoot + " -> " + $newRoot)
+                    Write-Log "INFO" ("Folder moved: " + $oldRoot + " -> " + $newRoot)
                 } catch {
-                    Write-Log "WARN" ("Move-Item echoue, tentative robocopy : " + $_.Exception.Message)
+                    Write-Log "WARN" ("Move-Item failed, trying robocopy: " + $_.Exception.Message)
                     New-Item -ItemType Directory -Path $newRoot -Force | Out-Null
                     & robocopy $oldRoot $newRoot /E /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1 | Out-Null
                     if ($LASTEXITCODE -lt 8) {
                         Remove-Item $oldRoot -Recurse -Force -ErrorAction SilentlyContinue
-                        Write-Log "INFO" "Deplacement via robocopy OK"
+                        Write-Log "INFO" "Folder moved via robocopy"
                     } else {
-                        Write-Log "ERROR" "Echec deplacement dossier"
+                        Write-Log "ERROR" "Folder move failed"
                     }
                 }
             } else {
-                Write-Log "INFO" ("Nouveau dossier existe deja — suppression ancien : " + $oldRoot)
+                Write-Log "INFO" ("New folder already exists -- removing old: " + $oldRoot)
                 Remove-Item $oldRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
-
-        # Mettre a jour les chemins de script
-        $script:RootDir      = $newRoot
-        $script:ProjectDir   = Join-Path $newRoot "project"
-        $script:LogDir       = Join-Path $newRoot "logs"
-        $script:BackupDir    = Join-Path $newRoot "backups"
-        $script:LocalVerFile = Join-Path $newRoot "version.txt"
     }
 
-    # --- Tache planifiee : nom ou intervalle a change
-    $taskChanged = (
-        $null -ne $Applied -and (
-            ($Applied.task_name -ne "" -and $Applied.task_name -ne $Cfg.task_name) -or
-            ($Applied.task_interval_min -gt 0 -and $Applied.task_interval_min -ne $Cfg.task_interval_min)
-        )
-    )
-
-    if ($taskChanged) {
-        Write-Log "INFO" ("Tache modifiee : " + $Applied.task_name + " (" + $Applied.task_interval_min + "min) -> " + $Cfg.task_name + " (" + $Cfg.task_interval_min + "min)")
-        if ($Applied.task_name -ne "" -and $Applied.task_name -ne $Cfg.task_name) {
-            & schtasks.exe /Delete /TN $Applied.task_name /F 2>&1 | Out-Null
-            Write-Log "INFO" ("Ancienne tache supprimee : " + $Applied.task_name)
-        }
-        Register-UpdaterTask -TaskName $Cfg.task_name -IntervalMin $Cfg.task_interval_min -LauncherPath $launcherVBS
-        Write-Log "INFO" ("Nouvelle tache enregistree : " + $Cfg.task_name + " toutes les " + $Cfg.task_interval_min + " min")
-    }
-
-    # Reconstruire les chemins derives (cas normal ou apres renommage)
+    # --- Rebuild derived paths (normal run or after rename)
     $script:RootDir      = Join-Path $AppDataRoot $Cfg.app_folder
     $script:ProjectDir   = Join-Path $script:RootDir "project"
     $script:LogDir       = Join-Path $script:RootDir "logs"
@@ -295,38 +268,51 @@ function Invoke-Reconciliation {
     foreach ($d in @($script:RootDir, $script:ProjectDir, $script:LogDir)) {
         if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     }
+
+    # --- Scheduled task: name or interval changed
+    $taskChanged = (
+        $null -ne $Applied -and (
+            ($Applied.task_name         -ne "" -and $Applied.task_name         -ne $Cfg.task_name) -or
+            ($Applied.task_interval_min -gt 0  -and $Applied.task_interval_min -ne $Cfg.task_interval_min)
+        )
+    )
+
+    if ($taskChanged) {
+        Write-Log "INFO" ("Task changed: " + $Applied.task_name + " (" + $Applied.task_interval_min + "min) -> " + $Cfg.task_name + " (" + $Cfg.task_interval_min + "min)")
+        if ($Applied.task_name -ne "" -and $Applied.task_name -ne $Cfg.task_name) {
+            & schtasks.exe /Delete /TN $Applied.task_name /F 2>&1 | Out-Null
+            Write-Log "INFO" ("Old task removed: " + $Applied.task_name)
+        }
+        Register-UpdaterTask -TaskName $Cfg.task_name -IntervalMin $Cfg.task_interval_min -LauncherPath $launcherVBS
+        Write-Log "INFO" ("New task registered: " + $Cfg.task_name + " every " + $Cfg.task_interval_min + " min")
+    }
 }
 
 # ----------------------------------------------------------------
-# Gestion des versions / rollback
+# Backup management
 # ----------------------------------------------------------------
 function Backup-CurrentVersion {
     param([hashtable]$Cfg)
     if (-not $Cfg.rollback_enabled) { return }
     if (-not (Test-Path $script:ProjectDir)) { return }
-
     $localVer = ""
     if (Test-Path $script:LocalVerFile) { $localVer = (Get-Content $script:LocalVerFile -Raw).Trim() }
     if ($localVer -eq "") { return }
-
     if (-not (Test-Path $script:BackupDir)) { New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null }
-
     $backupPath = Join-Path $script:BackupDir $localVer
     if (Test-Path $backupPath) { Remove-Item $backupPath -Recurse -Force -ErrorAction SilentlyContinue }
-
     & robocopy $script:ProjectDir $backupPath /E /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1 | Out-Null
     if ($LASTEXITCODE -lt 8) {
-        Write-Log "INFO" ("Backup OK : version " + $localVer)
+        Write-Log "INFO" ("Backup OK: version " + $localVer)
     } else {
-        Write-Log "WARN" ("Backup echoue pour version " + $localVer)
+        Write-Log "WARN" ("Backup failed for version " + $localVer)
     }
-
-    # Purger les backups en exces
+    # Purge excess backups
     $allBackups = @(Get-ChildItem $script:BackupDir -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
     if ($allBackups.Count -gt $Cfg.backup_versions) {
         $allBackups | Select-Object -Skip $Cfg.backup_versions | ForEach-Object {
             Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Log "INFO" ("Backup purge : " + $_.Name)
+            Write-Log "INFO" ("Backup purged: " + $_.Name)
         }
     }
 }
@@ -334,95 +320,89 @@ function Backup-CurrentVersion {
 function Invoke-Rollback {
     param([hashtable]$Cfg)
     if (-not $Cfg.rollback_enabled) { return $false }
-    if (-not (Test-Path $script:BackupDir)) { Write-Log "WARN" "Aucun backup disponible"; return $false }
-
+    if (-not (Test-Path $script:BackupDir)) { Write-Log "WARN" "No backup available"; return $false }
     $latest = Get-ChildItem $script:BackupDir -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($null -eq $latest) { Write-Log "WARN" "Dossier backup vide"; return $false }
-
-    Write-Log "INFO" ("Rollback vers : " + $latest.Name)
+    if ($null -eq $latest) { Write-Log "WARN" "Backup folder is empty"; return $false }
+    Write-Log "INFO" ("Rolling back to: " + $latest.Name)
     & robocopy $latest.FullName $script:ProjectDir /E /PURGE /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1 | Out-Null
     if ($LASTEXITCODE -lt 8) {
         Set-Content -Path $script:LocalVerFile -Value $latest.Name -Encoding UTF8
-        Write-Log "INFO" ("Rollback reussi : " + $latest.Name)
+        Write-Log "INFO" ("Rollback succeeded: " + $latest.Name)
         return $true
     }
-    Write-Log "ERROR" "Rollback echoue"
+    Write-Log "ERROR" "Rollback failed"
     return $false
 }
 
 # ----------------------------------------------------------------
-# Notification webhook (Slack / Teams / Discord / custom)
+# Webhook notification (Slack / Teams / Discord / custom)
 # ----------------------------------------------------------------
 function Send-Notification {
     param([hashtable]$Cfg, [string]$Status, [string]$Message)
-
     if ($Cfg.webhook_url -eq "") { return }
     if ($Status -eq "SUCCESS" -and -not $Cfg.notify_on_success) { return }
     if ($Status -eq "ERROR"   -and -not $Cfg.notify_on_error)   { return }
-
     try {
-        $body = '{"text":"[AutoUpdate ' + $Cfg.app_folder + '] ' + $Status + ' — ' + $Message.Replace('"','\"') + '"}'
+        $body = '{"text":"[AutoUpdate ' + $Cfg.app_folder + '] ' + $Status + ' -- ' + $Message.Replace('"','\"') + '"}'
         $wc   = New-NoCacheWebClient
         $wc.Headers.Add("Content-Type", "application/json")
         $wc.UploadString($Cfg.webhook_url, "POST", $body) | Out-Null
         $wc.Dispose()
-        Write-Log "INFO" ("Notification " + $Status + " envoyee")
+        Write-Log "INFO" ("Notification sent: " + $Status)
     } catch {
-        Write-Log "WARN" ("Notification echouee : " + $_.Exception.Message)
+        Write-Log "WARN" ("Notification failed: " + $_.Exception.Message)
     }
 }
 
 # ----------------------------------------------------------------
-# Verification espace disque libre
+# Disk space check
 # ----------------------------------------------------------------
 function Test-DiskSpace {
     param([int]$MinFreeMb)
     try {
-        $drive = [System.IO.Path]::GetPathRoot($script:RootDir)
-        $disk  = Get-PSDrive ($drive.TrimEnd('\').TrimEnd(':')) -ErrorAction SilentlyContinue
+        $drive  = [System.IO.Path]::GetPathRoot($script:RootDir)
+        $disk   = Get-PSDrive ($drive.TrimEnd('\').TrimEnd(':')) -ErrorAction SilentlyContinue
         if ($null -eq $disk) { return $true }
         $freeMb = [math]::Round($disk.Free / 1MB, 0)
         if ($freeMb -lt $MinFreeMb) {
-            Write-Log "ERROR" ("Espace insuffisant : " + $freeMb + " MB libres, minimum requis : " + $MinFreeMb + " MB")
+            Write-Log "ERROR" ("Insufficient disk space: " + $freeMb + " MB free, minimum required: " + $MinFreeMb + " MB")
             return $false
         }
         return $true
-    } catch {
-        return $true
-    }
+    } catch { return $true }
 }
 
 # ----------------------------------------------------------------
-# Telechargement avec retry
+# Download with retry
 # ----------------------------------------------------------------
 function Download-WithRetry {
     param([string]$Url, [string]$Dest, [int]$MaxRetries, [array]$Delays)
     for ($i = 1; $i -le $MaxRetries; $i++) {
-        Write-Log "INFO" ("Telechargement tentative " + $i + "/" + $MaxRetries)
+        Write-Log "INFO" ("Download attempt " + $i + "/" + $MaxRetries)
         try {
             $wc = New-NoCacheWebClient
             $wc.DownloadFile($Url, $Dest)
             $wc.Dispose()
             if ((Test-Path $Dest) -and (Get-Item $Dest).Length -gt 1024) {
-                Write-Log "INFO" ("OK — " + [math]::Round((Get-Item $Dest).Length / 1KB, 1) + " KB")
+                Write-Log "INFO" ("Download OK -- " + [math]::Round((Get-Item $Dest).Length / 1KB, 1) + " KB")
                 return $true
             }
-            Write-Log "WARN" "Fichier trop petit — possible 404"
+            Write-Log "WARN" "File too small -- possible 404"
         } catch {
-            Write-Log "WARN" ("Erreur reseau tentative " + $i + " : " + $_.Exception.Message)
+            Write-Log "WARN" ("Network error attempt " + $i + ": " + $_.Exception.Message)
         }
         if ($i -lt $MaxRetries) {
             $wait = if ($i - 1 -lt $Delays.Count) { $Delays[$i - 1] } else { 120 }
-            Write-Log "INFO" ("Nouvel essai dans " + $wait + " secondes")
+            Write-Log "INFO" ("Retrying in " + $wait + " seconds...")
             Start-Sleep -Seconds $wait
         }
     }
-    Write-Log "ERROR" ("Telechargement echoue apres " + $MaxRetries + " tentatives")
+    Write-Log "ERROR" ("Download failed after " + $MaxRetries + " attempts")
     return $false
 }
 
 # ----------------------------------------------------------------
-# Extraction ZIP
+# ZIP extraction
 # ----------------------------------------------------------------
 function Expand-Archive-Compat {
     param([string]$ZipFile, [string]$OutPath)
@@ -447,27 +427,27 @@ function Expand-Archive-Compat {
         }
         return $true
     } catch {
-        Write-Log "ERROR" ("Extraction : " + $_.Exception.Message)
+        Write-Log "ERROR" ("Extraction failed: " + $_.Exception.Message)
         return $false
     }
 }
 
 # ----------------------------------------------------------------
-# Detection du dossier racine dans le ZIP
+# Detect root folder inside ZIP
 # ----------------------------------------------------------------
 function Resolve-ExtractRoot {
     param([string]$Path)
     $canon = (Resolve-Path $Path).Path
     $items = @(Get-ChildItem $canon -ErrorAction SilentlyContinue)
     if ($items.Count -eq 1 -and $items[0].PSIsContainer) {
-        Write-Log "INFO" ("Wrapper detecte : " + $items[0].Name + " — suppression")
+        Write-Log "INFO" ("Wrapper folder detected: " + $items[0].Name + " -- unwrapping")
         return (Resolve-Path $items[0].FullName).Path
     }
     return $canon
 }
 
 # ----------------------------------------------------------------
-# Copie des fichiers vers ProjectDir
+# Copy files to ProjectDir
 # ----------------------------------------------------------------
 function Copy-ProjectFiles {
     param([string]$Src, [string]$Dest)
@@ -475,10 +455,10 @@ function Copy-ProjectFiles {
         if (-not (Test-Path $Dest)) { New-Item -ItemType Directory -Path $Dest -Force | Out-Null }
         & robocopy $Src $Dest /E /PURGE /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1 | Out-Null
         if ($LASTEXITCODE -lt 8) {
-            Write-Log "INFO" ("Copie OK robocopy (exit " + $LASTEXITCODE + ")")
+            Write-Log "INFO" ("Copy OK robocopy (exit " + $LASTEXITCODE + ")")
             return $true
         }
-        Write-Log "WARN" ("robocopy exit " + $LASTEXITCODE + " — fallback Copy-Item")
+        Write-Log "WARN" ("robocopy exit " + $LASTEXITCODE + " -- falling back to Copy-Item")
         Push-Location $Src
         Get-ChildItem -Recurse | ForEach-Object {
             $rel    = (Resolve-Path -Relative $_.FullName).TrimStart(".\\/")
@@ -492,17 +472,17 @@ function Copy-ProjectFiles {
             }
         }
         Pop-Location
-        Write-Log "INFO" "Copie OK (Copy-Item fallback)"
+        Write-Log "INFO" "Copy OK (Copy-Item fallback)"
         return $true
     } catch {
         try { Pop-Location } catch {}
-        Write-Log "ERROR" ("Copie : " + $_.Exception.Message)
+        Write-Log "ERROR" ("Copy failed: " + $_.Exception.Message)
         return $false
     }
 }
 
 # ----------------------------------------------------------------
-# Telechargement des fichiers supplementaires
+# Download extra files
 # ----------------------------------------------------------------
 function Get-ExtraFiles {
     param([hashtable]$Cfg)
@@ -516,11 +496,13 @@ function Get-ExtraFiles {
             $destFull = if ([System.IO.Path]::IsPathRooted($dest)) { $dest } else { Join-Path $script:ProjectDir $dest }
             $destDir  = Split-Path $destFull -Parent
             if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-            Write-Log "INFO" ("Fichier extra : " + $url)
-            $dlOk = Download-WithRetry -Url $url -Dest $destFull -MaxRetries $Cfg.retry_max -Delays $Cfg.retry_delays_sec
-            if (-not $dlOk) { Write-Log "WARN" ("Fichier extra echoue : " + $url); $ok = $false }
+            Write-Log "INFO" ("Extra file: " + $url)
+            if (-not (Download-WithRetry -Url $url -Dest $destFull -MaxRetries $Cfg.retry_max -Delays $Cfg.retry_delays_sec)) {
+                Write-Log "WARN" ("Extra file failed: " + $url)
+                $ok = $false
+            }
         } catch {
-            Write-Log "WARN" ("Erreur extra_files : " + $_.Exception.Message)
+            Write-Log "WARN" ("extra_files error: " + $_.Exception.Message)
             $ok = $false
         }
     }
@@ -528,7 +510,7 @@ function Get-ExtraFiles {
 }
 
 # ----------------------------------------------------------------
-# Arret du processus applicatif avant MAJ
+# Stop / start the application process
 # ----------------------------------------------------------------
 function Stop-AppProcess {
     param([hashtable]$Cfg)
@@ -537,17 +519,14 @@ function Stop-AppProcess {
         $procs = Get-Process -Name ($Cfg.kill_process_name -replace "\.exe$","") -ErrorAction SilentlyContinue
         if ($procs) {
             $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-            Write-Log "INFO" ("Processus arrete : " + $Cfg.kill_process_name)
+            Write-Log "INFO" ("Process stopped: " + $Cfg.kill_process_name)
             Start-Sleep -Seconds 2
         }
     } catch {
-        Write-Log "WARN" ("Stop-AppProcess : " + $_.Exception.Message)
+        Write-Log "WARN" ("Stop-AppProcess: " + $_.Exception.Message)
     }
 }
 
-# ----------------------------------------------------------------
-# Demarrage de l'application apres MAJ
-# ----------------------------------------------------------------
 function Start-AppProcess {
     param([hashtable]$Cfg)
     if (-not $Cfg.restart_after -or $Cfg.restart_exe -eq "") { return }
@@ -559,32 +538,32 @@ function Start-AppProcess {
         }
         if (Test-Path $exePath) {
             Start-Process -FilePath $exePath -WorkingDirectory $script:ProjectDir -WindowStyle Normal
-            Write-Log "INFO" ("Application redemarree : " + $exePath)
+            Write-Log "INFO" ("Application restarted: " + $exePath)
         } else {
-            Write-Log "WARN" ("restart_exe introuvable : " + $exePath)
+            Write-Log "WARN" ("restart_exe not found: " + $exePath)
         }
     } catch {
-        Write-Log "WARN" ("Start-AppProcess : " + $_.Exception.Message)
+        Write-Log "WARN" ("Start-AppProcess: " + $_.Exception.Message)
     }
 }
 
 # ----------------------------------------------------------------
-# Execution de setup.py
+# Run setup.py
 # ----------------------------------------------------------------
 function Invoke-SetupScript {
     param([hashtable]$Cfg)
     $pyPath    = Join-Path $script:ProjectDir $Cfg.python_exe
     $setupPath = Join-Path $script:ProjectDir $Cfg.setup_script
     if (-not (Test-Path $pyPath)) {
-        Write-Log "ERROR" ("Python introuvable : " + $pyPath)
+        Write-Log "ERROR" ("Python not found: " + $pyPath)
         return $false
     }
     if (-not (Test-Path $setupPath)) {
-        Write-Log "ERROR" ("setup.py introuvable : " + $setupPath)
+        Write-Log "ERROR" ("setup script not found: " + $setupPath)
         return $false
     }
     try {
-        Write-Log "INFO" ("Execution : " + $Cfg.python_exe + " " + $Cfg.setup_script)
+        Write-Log "INFO" ("Running: " + $Cfg.python_exe + " " + $Cfg.setup_script)
         $psi                  = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName         = $pyPath
         $psi.Arguments        = '"' + $setupPath + '"'
@@ -594,19 +573,19 @@ function Invoke-SetupScript {
         $psi.UseShellExecute  = $false
         $proc = [Diagnostics.Process]::Start($psi)
         $proc.WaitForExit()
-        Write-Log "INFO" ("setup.py exit code : " + $proc.ExitCode)
+        Write-Log "INFO" ("setup.py exit code: " + $proc.ExitCode)
         if ($proc.ExitCode -ne 0) {
-            Write-Log "WARN" ("setup.py code non-zero : " + $proc.ExitCode)
+            Write-Log "WARN" ("setup.py non-zero exit: " + $proc.ExitCode)
         }
         return $true
     } catch {
-        Write-Log "ERROR" ("Lancement Python : " + $_.Exception.Message)
+        Write-Log "ERROR" ("Could not launch Python: " + $_.Exception.Message)
         return $false
     }
 }
 
 # ----------------------------------------------------------------
-# Lecture version distante avec retry
+# Version checks
 # ----------------------------------------------------------------
 function Get-RemoteVersion {
     param([string]$VerUrl, [int]$MaxRetries, [array]$Delays)
@@ -616,12 +595,12 @@ function Get-RemoteVersion {
             $raw = $wc.DownloadString($VerUrl + "?nc=" + (Get-UnixMs)).Trim()
             $wc.Dispose()
             if ($raw.Length -gt 0) {
-                Write-Log "INFO" ("Version distante : " + $raw)
+                Write-Log "INFO" ("Remote version: " + $raw)
                 return $raw
             }
-            Write-Log "WARN" "version.txt vide"
+            Write-Log "WARN" "version.txt is empty"
         } catch {
-            Write-Log "WARN" ("Fetch version tentative " + $i + " : " + $_.Exception.Message)
+            Write-Log "WARN" ("Version fetch attempt " + $i + ": " + $_.Exception.Message)
         }
         if ($i -lt $MaxRetries) {
             $wait = if ($i - 1 -lt $Delays.Count) { $Delays[$i - 1] } else { 30 }
@@ -633,69 +612,69 @@ function Get-RemoteVersion {
 
 function Get-LocalVersion {
     if (-not (Test-Path $script:LocalVerFile)) {
-        Write-Log "INFO" "Premiere installation (pas de version.txt local)"
+        Write-Log "INFO" "First install (no local version.txt)"
         return $null
     }
     $v = (Get-Content $script:LocalVerFile -Raw).Trim()
-    Write-Log "INFO" ("Version locale : " + $v)
+    Write-Log "INFO" ("Local version: " + $v)
     return $v
 }
 
 # ================================================================
-# LOGIQUE PRINCIPALE
+# MAIN LOGIC
 # ================================================================
 Write-Log "INFO" "====== UPDATER START (v4.0) BaseUrl: $BaseUrl ======"
 
-# --- 1. Lire la config serveur
+# 1. Read server config
 $cfg = Read-ServerConfig -Url ($BaseUrl + "/config.json")
 if ($null -eq $cfg) {
-    Write-Log "ERROR" "Impossible de lire config.json"
+    Write-Log "ERROR" "Cannot read config.json -- aborting"
     exit 1
 }
-Write-Log "INFO" ("Config chargee : " + $cfg.app_folder + " / tache : " + $cfg.task_name)
+Write-Log "INFO" ("Config loaded: app_folder=" + $cfg.app_folder + " task=" + $cfg.task_name)
 
-# --- 2. Lire l'etat applique localement
+# 2. Read applied state
 $applied = Read-AppliedState -Path $AppliedPath
 
-# --- 3. Reconcilier l'infrastructure (renommage dossier, recreation tache)
+# 3. Reconcile infrastructure (folder rename, task recreation)
 Invoke-Reconciliation -Cfg $cfg -Applied $applied
 
-# --- 4. Verifier si les MAJ sont activees
+# 4. Check if updates are enabled
 if (-not $cfg.update_enabled) {
-    Write-Log "INFO" "update_enabled=false — cycle ignore"
+    Write-Log "INFO" "update_enabled=false -- cycle skipped"
     exit 0
 }
 
-# --- 5. Verifier l'espace disque
+# 5. Check disk space
 if (-not (Test-DiskSpace -MinFreeMb $cfg.min_free_mb)) {
-    Send-Notification -Cfg $cfg -Status "ERROR" -Message ("Espace disque insuffisant sur " + $script:RootDir)
+    Send-Notification -Cfg $cfg -Status "ERROR" -Message ("Insufficient disk space on " + $script:RootDir)
     exit 1
 }
 
-# --- 6. Comparer les versions
+# 6. Compare versions
 $verUrl    = $BaseUrl + "/version.txt"
 $remoteVer = Get-RemoteVersion -VerUrl $verUrl -MaxRetries $cfg.retry_max -Delays $cfg.retry_delays_sec
 $localVer  = Get-LocalVersion
 
 if ($null -eq $remoteVer) {
-    Write-Log "WARN" "Version distante inaccessible — cycle ignore"
+    Write-Log "WARN" "Remote version unreachable -- cycle skipped"
     exit 0
 }
 
 if ($remoteVer -eq $localVer) {
-    Write-Log "INFO" ("Deja a jour : " + $localVer)
+    Write-Log "INFO" ("Already up to date: " + $localVer)
     exit 0
 }
 
-Write-Log "INFO" ("Mise a jour : " + $localVer + " -> " + $remoteVer)
+Write-Log "INFO" ("Update: " + $localVer + " -> " + $remoteVer)
 
-# --- 7. Backup de la version actuelle
+# 7. Backup current version
 Backup-CurrentVersion -Cfg $cfg
 
-# --- 8. Arreter l'application si demande
+# 8. Stop app if requested
 Stop-AppProcess -Cfg $cfg
 
-# --- 9. Telecharger et installer
+# 9. Download and install
 $TempDir     = Join-Path $env:TEMP ("GH_Update_" + $cfg.app_folder)
 $ZipPath     = Join-Path $TempDir "download.zip"
 $ExtractPath = Join-Path $TempDir "extracted"
@@ -703,17 +682,15 @@ $ExtractPath = Join-Path $TempDir "extracted"
 if (Test-Path $TempDir) { Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
-$zipUrl = $BaseUrl + "/" + $cfg.zip_path
-
-if (-not (Download-WithRetry -Url $zipUrl -Dest $ZipPath -MaxRetries $cfg.retry_max -Delays $cfg.retry_delays_sec)) {
+if (-not (Download-WithRetry -Url ($BaseUrl + "/" + $cfg.zip_path) -Dest $ZipPath -MaxRetries $cfg.retry_max -Delays $cfg.retry_delays_sec)) {
     Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Send-Notification -Cfg $cfg -Status "ERROR" -Message "Echec telechargement ZIP"
+    Send-Notification -Cfg $cfg -Status "ERROR" -Message "ZIP download failed"
     exit 1
 }
 
 if (-not (Expand-Archive-Compat -ZipFile $ZipPath -OutPath $ExtractPath)) {
     Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Send-Notification -Cfg $cfg -Status "ERROR" -Message "Echec extraction ZIP"
+    Send-Notification -Cfg $cfg -Status "ERROR" -Message "ZIP extraction failed"
     exit 1
 }
 
@@ -721,42 +698,41 @@ $realSource = Resolve-ExtractRoot -Path $ExtractPath
 
 if (-not (Copy-ProjectFiles -Src $realSource -Dest $script:ProjectDir)) {
     Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "INFO" "Tentative de rollback..."
+    Write-Log "INFO" "Copy failed -- attempting rollback..."
     if (Invoke-Rollback -Cfg $cfg) {
-        Send-Notification -Cfg $cfg -Status "ERROR" -Message ("Copie echouee — rollback effectue vers " + $localVer)
+        Send-Notification -Cfg $cfg -Status "ERROR" -Message ("Copy failed -- rolled back to " + $localVer)
     } else {
-        Send-Notification -Cfg $cfg -Status "ERROR" -Message "Copie echouee — rollback impossible"
+        Send-Notification -Cfg $cfg -Status "ERROR" -Message "Copy failed -- rollback not possible"
     }
     exit 1
 }
 
 Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-Write-Log "INFO" "Dossier temp nettoye"
+Write-Log "INFO" "Temp folder cleaned"
 
-# --- 10. Telecharger les fichiers supplementaires
+# 10. Download extra files
 Get-ExtraFiles -Cfg $cfg | Out-Null
 
-# --- 11. Executer setup.py
+# 11. Run setup.py
 if (-not (Invoke-SetupScript -Cfg $cfg)) {
-    Write-Log "ERROR" "setup.py a echoue"
-    Write-Log "INFO" "Tentative de rollback..."
+    Write-Log "ERROR" "setup.py failed -- attempting rollback..."
     if (Invoke-Rollback -Cfg $cfg) {
         Invoke-SetupScript -Cfg $cfg | Out-Null
-        Send-Notification -Cfg $cfg -Status "ERROR" -Message ("setup.py echoue — rollback effectue vers " + $localVer)
+        Send-Notification -Cfg $cfg -Status "ERROR" -Message ("setup.py failed -- rolled back to " + $localVer)
     } else {
-        Send-Notification -Cfg $cfg -Status "ERROR" -Message "setup.py echoue — rollback impossible"
+        Send-Notification -Cfg $cfg -Status "ERROR" -Message "setup.py failed -- rollback not possible"
     }
     exit 1
 }
 
-# --- 12. Sauvegarder la nouvelle version et l'etat applique
+# 12. Save new version and applied state
 Set-Content -Path $script:LocalVerFile -Value $remoteVer -Encoding UTF8
 Save-AppliedState -Path $AppliedPath -Cfg $cfg -Version $remoteVer
-Write-Log "INFO" ("Version sauvegardee : " + $remoteVer)
+Write-Log "INFO" ("Version saved: " + $remoteVer)
 
-# --- 13. Redemarrer l'application si demande
+# 13. Restart app if requested
 Start-AppProcess -Cfg $cfg
 
-Send-Notification -Cfg $cfg -Status "SUCCESS" -Message ("Mise a jour reussie : " + $localVer + " -> " + $remoteVer)
-Write-Log "INFO" "====== UPDATE SUCCESS : $remoteVer ======"
+Send-Notification -Cfg $cfg -Status "SUCCESS" -Message ("Update successful: " + $localVer + " -> " + $remoteVer)
+Write-Log "INFO" "====== UPDATE SUCCESS: $remoteVer ======"
 exit 0

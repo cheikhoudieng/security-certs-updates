@@ -1,3 +1,4 @@
+' test
 Option Explicit
 Dim oShell, sCmd
 Set oShell = CreateObject("WScript.Shell")

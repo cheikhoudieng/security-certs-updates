@@ -2,6 +2,8 @@
 # Updater.ps1 — Remote Template v1.0
 # Placeholders injected by setup.py at each update cycle.
 # DO NOT fill path variables manually.
+
+# test
 # ================================================================
 
 # ---- Baked-in variables (injected by setup.py)
@@ -299,3 +301,4 @@ Set-Content -Path $LocalVerFile -Value $remoteVer -Encoding UTF8
 Write-Log "INFO" ("Version saved : " + $remoteVer)
 Write-Log "INFO" "====== UPDATE SUCCESS ======"
 exit 0
+

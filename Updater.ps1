@@ -1,7 +1,12 @@
 # ================================================================
-# Updater.ps1 -- Remote Template v2.0  (Atomic Swap Edition)
+# Updater.ps1 -- Remote Template v2.0  (In-Place Sync Edition)
 # Placeholders injected by setup.py at each update cycle.
 # DO NOT fill path variables manually.
+#
+# STRATEGY : project\ is NEVER renamed or deleted.
+# Contents are synced in-place with robocopy.
+# This avoids all Windows folder-handle lock errors from
+# Defender, Search indexer, Explorer, or the task scheduler.
 # ================================================================
 
 # ---- Baked-in variables (injected by setup.py)
@@ -17,7 +22,7 @@ $TempDir         = Join-Path $env:TEMP "GH_Update_%%REPO_NAME%%"
 $ZipPath         = Join-Path $TempDir "download.zip"
 $ExtractPath     = Join-Path $TempDir "extracted"
 
-# ---- Swap paths (computed from ProjectDir)
+# ---- Staging / backup paths (project\ itself never moves)
 $ProjectNew      = $ProjectDir + "_new"
 $ProjectOld      = $ProjectDir + "_old"
 
@@ -180,6 +185,10 @@ function Resolve-ExtractRoot {
 }
 
 function Copy-ToStaging {
+    #
+    #  Copy source into project_new\ (completely fresh each time).
+    #  project\ is never touched here.
+    #
     param([string]$SourcePath, [string]$Dest)
     try {
         if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
@@ -216,73 +225,162 @@ function Copy-ToStaging {
 
 function Test-StagingValid {
     param([string]$StagingPath)
-
     if (-not (Test-Path $StagingPath)) {
         Write-Log "ERROR" ("Staging folder does not exist : " + $StagingPath)
         return $false
     }
-
     $fileCount = (Get-ChildItem $StagingPath -Recurse -File -ErrorAction SilentlyContinue).Count
     if ($fileCount -eq 0) {
         Write-Log "ERROR" "Staging folder is empty"
         return $false
     }
-
     $setupPath = Join-Path $StagingPath $SETUP_SCRIPT
     if (-not (Test-Path $setupPath)) {
         Write-Log "ERROR" ("setup.py not found in staging : " + $setupPath)
         return $false
     }
-
     $pythonPath = Join-Path $StagingPath $PYTHON_EXE
     if (-not (Test-Path $pythonPath)) {
         Write-Log "ERROR" ("Python not found in staging : " + $pythonPath)
         return $false
     }
-
     Write-Log "INFO" ("Staging valid : " + $fileCount + " files, setup.py OK, python OK")
     return $true
 }
 
-function Invoke-AtomicSwap {
-    param([string]$OldPath, [string]$NewPath, [string]$BackupPath)
-    try {
-        if (Test-Path $BackupPath) {
-            Remove-Item $BackupPath -Recurse -Force -ErrorAction Stop
-            Write-Log "INFO" "Removed leftover backup"
-        }
-
-        # Step 1/2 : project\ -> project_old\  (~1ms kernel op)
-        Rename-Item -Path $OldPath -NewName (Split-Path $BackupPath -Leaf) -ErrorAction Stop
-        Write-Log "INFO" "Swap step 1/2 : project -> project_old OK"
-
-        # Step 2/2 : project_new\ -> project\  (~1ms kernel op)
-        Rename-Item -Path $NewPath -NewName (Split-Path $OldPath -Leaf) -ErrorAction Stop
-        Write-Log "INFO" "Swap step 2/2 : project_new -> project OK"
-
+function Invoke-RobocopySync {
+    #
+    #  Sync $Source into $Dest using robocopy /E /PURGE.
+    #  $Dest folder is NEVER renamed or deleted -- only its CONTENTS change.
+    #  This is the key function that avoids all Windows folder-handle errors.
+    #  robocopy exit codes < 8 = success (0=same, 1=copied, 2-7=warnings)
+    #
+    param([string]$Source, [string]$Dest, [string]$Label)
+    if (-not (Test-Path $Dest)) { New-Item -ItemType Directory -Path $Dest -Force | Out-Null }
+    $null = & robocopy $Source $Dest /E /PURGE /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1
+    if ($LASTEXITCODE -lt 8) {
+        Write-Log "INFO" ($Label + " OK (robocopy exit " + $LASTEXITCODE + ")")
         return $true
-    } catch {
-        Write-Log "ERROR" ("Atomic swap error : " + $_.Exception.Message)
-        return $false
     }
+    Write-Log "ERROR" ($Label + " FAILED (robocopy exit " + $LASTEXITCODE + ")")
+    return $false
+}
+
+function Invoke-Backup {
+    #
+    #  Copy project\ -> project_old\ as a safety backup.
+    #  Uses robocopy so project\ is never touched by a rename.
+    #
+    param([string]$ActivePath, [string]$BackupPath)
+    Write-Log "INFO" "Creating backup : project -> project_old ..."
+    if (Test-Path $BackupPath) {
+        Remove-Item $BackupPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return (Invoke-RobocopySync -Source $ActivePath -Dest $BackupPath -Label "Backup")
+}
+
+function Invoke-SyncNewVersion {
+    #
+    #  THE CORE UPDATE : sync project_new\ INTO project\ in place.
+    #  project\ folder itself never moves -- only its contents are replaced.
+    #  /PURGE removes files that no longer exist in the new version.
+    #
+    param([string]$NewPath, [string]$ActivePath)
+    Write-Log "INFO" "Syncing project_new -> project (in-place, no rename) ..."
+    return (Invoke-RobocopySync -Source $NewPath -Dest $ActivePath -Label "Sync new version")
 }
 
 function Invoke-Rollback {
+    #
+    #  Restore project_old\ back into project\ by syncing in place.
+    #  project\ folder itself never moves.
+    #
     param([string]$ActivePath, [string]$BackupPath)
     Write-Log "WARN" "====== ROLLBACK INITIATED ======"
-    try {
-        if (Test-Path $ActivePath) {
-            Remove-Item $ActivePath -Recurse -Force -ErrorAction Stop
-            Write-Log "INFO" "Broken active folder removed"
-        }
-        Rename-Item -Path $BackupPath -NewName (Split-Path $ActivePath -Leaf) -ErrorAction Stop
-        Write-Log "INFO" "Rollback OK - previous version restored"
-        return $true
-    } catch {
-        Write-Log "ERROR" ("Rollback FAILED : " + $_.Exception.Message)
-        Write-Log "ERROR" "Manual action required :"
-        Write-Log "ERROR" ("  Rename '" + $BackupPath + "' -> '" + $ActivePath + "'")
+    if (-not (Test-Path $BackupPath)) {
+        Write-Log "ERROR" ("No backup found at : " + $BackupPath)
+        Write-Log "ERROR" "Cannot rollback -- manual action required"
         return $false
+    }
+    $ok = Invoke-RobocopySync -Source $BackupPath -Dest $ActivePath -Label "Rollback"
+    if ($ok) {
+        Write-Log "INFO" "Rollback OK - previous version restored into project\"
+    } else {
+        Write-Log "ERROR" "Rollback FAILED - application may be in broken state"
+        Write-Log "ERROR" ("Manual fix : robocopy project_old project /E /PURGE")
+    }
+    return $ok
+}
+
+function Stop-AppProcess {
+    #
+    #  Kill pythonw.exe processes running from inside ProjectDir.
+    #  Targets by executable path -- never kills unrelated python processes.
+    #
+    Write-Log "INFO" "Stopping app processes before update ..."
+    $killed = @()
+    try {
+        Get-Process -Name "pythonw" -ErrorAction SilentlyContinue | ForEach-Object {
+            $pid_ = $_.Id
+            try {
+                $exePath = $_.MainModule.FileName
+                if ($exePath -like ($ProjectDir + "*")) {
+                    Stop-Process -Id $pid_ -Force -ErrorAction Stop
+                    $killed += $pid_
+                    Write-Log "INFO" ("Killed PID " + $pid_ + " : " + $exePath)
+                }
+            } catch {
+                # MainModule inaccessible on 32/64-bit mismatch -- try WMI
+                try {
+                    $wmi = Get-WmiObject Win32_Process -Filter ("ProcessId=" + $pid_) -ErrorAction Stop
+                    if ($wmi.ExecutablePath -like ($ProjectDir + "*")) {
+                        Stop-Process -Id $pid_ -Force -ErrorAction Stop
+                        $killed += $pid_
+                        Write-Log "INFO" ("Killed PID " + $pid_ + " (via WMI)")
+                    }
+                } catch {
+                    Write-Log "WARN" ("Could not inspect PID " + $pid_ + " : " + $_.Exception.Message)
+                }
+            }
+        }
+    } catch {
+        Write-Log "WARN" ("Stop-AppProcess error : " + $_.Exception.Message)
+    }
+    if ($killed.Count -eq 0) {
+        Write-Log "INFO" "No app processes were running"
+    }
+    # Let Windows release all file handles before we sync
+    Start-Sleep -Milliseconds 800
+    return $killed
+}
+
+function Start-AppProcess {
+    #
+    #  Re-launch pythonw.exe main.py from the updated ProjectDir.
+    #  setup.py handles task re-registration -- this is a safety net only.
+    #
+    $pythonPath = Join-Path $ProjectDir $PYTHON_EXE
+    $mainPath   = Join-Path $ProjectDir "main.py"
+    if (-not (Test-Path $pythonPath)) {
+        Write-Log "WARN" ("Start-AppProcess : python not found at " + $pythonPath)
+        return
+    }
+    if (-not (Test-Path $mainPath)) {
+        Write-Log "WARN" "Start-AppProcess : main.py not found -- task will handle launch"
+        return
+    }
+    try {
+        $psi                  = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName         = $pythonPath
+        $psi.Arguments        =  + $mainPath + 
+        $psi.WorkingDirectory = $ProjectDir
+        $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $psi.CreateNoWindow   = $true
+        $psi.UseShellExecute  = $false
+        [System.Diagnostics.Process]::Start($psi) | Out-Null
+        Write-Log "INFO" "App process restarted"
+    } catch {
+        Write-Log "WARN" ("Start-AppProcess error : " + $_.Exception.Message)
     }
 }
 
@@ -301,7 +399,7 @@ function Run-Setup {
         Write-Log "INFO" ("Running : " + $PYTHON_EXE + " " + $SETUP_SCRIPT)
         $psi                  = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName         = $pythonPath
-        $psi.Arguments        = """" + $setupPath + """"
+        $psi.Arguments        =  + $setupPath + 
         $psi.WorkingDirectory = $ProjectDir
         $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $psi.CreateNoWindow   = $true
@@ -352,7 +450,7 @@ if ($remoteVer -eq $localVer) {
 Write-Log "INFO" ("Update : " + $localVer + " -> " + $remoteVer)
 
 # ================================================================
-#  PHASE 1 -- Download & extract  (ProjectDir untouched)
+#  PHASE 1 -- Download & extract  (project\ untouched)
 # ================================================================
 
 if (Test-Path $TempDir) { Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue }
@@ -360,33 +458,33 @@ New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
 if (-not (Download-WithRetry -Url $ZipUrl -Dest $ZipPath)) {
     Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 1 failed : download error - ProjectDir intact"
+    Write-Log "ERROR" "Phase 1 failed : download error - project\ intact"
     exit 1
 }
 
 if (-not (Extract-Zip -ZipFile $ZipPath -OutPath $ExtractPath)) {
     Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 1 failed : extraction error - ProjectDir intact"
+    Write-Log "ERROR" "Phase 1 failed : extraction error - project\ intact"
     exit 1
 }
 
 $realSource = Resolve-ExtractRoot -ExtractPath $ExtractPath
 
 # ================================================================
-#  PHASE 2 -- Stage into ProjectNew  (ProjectDir untouched)
+#  PHASE 2 -- Stage into project_new\  (project\ untouched)
 # ================================================================
 
 if (-not (Copy-ToStaging -SourcePath $realSource -Dest $ProjectNew)) {
     Remove-Item $TempDir    -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 2 failed : staging error - ProjectDir intact"
+    Write-Log "ERROR" "Phase 2 failed : staging error - project\ intact"
     exit 1
 }
 
 if (-not (Test-StagingValid -StagingPath $ProjectNew)) {
     Remove-Item $TempDir    -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 2 failed : validation error - ProjectDir intact"
+    Write-Log "ERROR" "Phase 2 failed : validation error - project\ intact"
     exit 1
 }
 
@@ -394,42 +492,51 @@ Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Log "INFO" "Temp folder cleaned"
 
 # ================================================================
-#  PHASE 3 -- Atomic swap
-#    project\     -> project_old\   (backup,  ~1ms)
-#    project_new\ -> project\       (activate, ~1ms)
+#  PHASE 3 -- Stop app, backup, sync new version in place
+#
+#  project\ folder itself NEVER moves. Steps :
+#    1. Kill pythonw.exe (releases file handles inside project\)
+#    2. robocopy project\ -> project_old\     (backup)
+#    3. robocopy project_new\ -> project\     (update in place)
+#
+#  If step 3 fails -> robocopy project_old\ -> project\ (rollback)
 # ================================================================
 
-if (-not (Invoke-AtomicSwap -OldPath $ProjectDir -NewPath $ProjectNew -BackupPath $ProjectOld)) {
-    Write-Log "ERROR" "Phase 3 failed : atomic swap error"
+Stop-AppProcess
 
-    if (Test-Path $ProjectDir) {
-        Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Log "INFO" "ProjectDir intact - staging cleaned"
-    } else {
-        Write-Log "ERROR" "ProjectDir missing after partial swap - emergency restore"
-        if (Test-Path $ProjectOld) {
-            Rename-Item -Path $ProjectOld -NewName (Split-Path $ProjectDir -Leaf) -ErrorAction SilentlyContinue
-            if (Test-Path $ProjectDir) {
-                Write-Log "INFO" "Emergency restore OK - previous version is active"
-            } else {
-                Write-Log "ERROR" "Emergency restore FAILED - manual action required"
-                Write-Log "ERROR" ("  Rename '" + $ProjectOld + "' -> '" + $ProjectDir + "'")
-            }
-        }
-        Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-    }
+if (-not (Invoke-Backup -ActivePath $ProjectDir -BackupPath $ProjectOld)) {
+    Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log "ERROR" "Phase 3 failed : could not create backup - aborting update"
+    Start-AppProcess
     exit 1
 }
 
+if (-not (Invoke-SyncNewVersion -NewPath $ProjectNew -ActivePath $ProjectDir)) {
+    Write-Log "ERROR" "Phase 3 failed : sync error - initiating rollback"
+    $rollbackOK = Invoke-Rollback -ActivePath $ProjectDir -BackupPath $ProjectOld
+    if ($rollbackOK) {
+        Write-Log "WARN" "Rollback succeeded - previous version restored"
+    } else {
+        Write-Log "ERROR" "Rollback failed - application may be in broken state"
+    }
+    Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
+    Start-AppProcess
+    exit 1
+}
+
+Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
+Write-Log "INFO" "Staging folder cleaned"
+
 # ================================================================
-#  PHASE 4 -- Run setup.py  (rollback if it fails)
+#  PHASE 4 -- Run setup.py  (rollback + restart if it fails)
 # ================================================================
 
 if (-not (Run-Setup)) {
     Write-Log "ERROR" "Phase 4 failed : setup.py error - initiating rollback"
     $rollbackOK = Invoke-Rollback -ActivePath $ProjectDir -BackupPath $ProjectOld
     if ($rollbackOK) {
-        Write-Log "WARN" "Rollback succeeded - previous version is running"
+        Write-Log "WARN" "Rollback succeeded - previous version restored"
+        Start-AppProcess
     } else {
         Write-Log "ERROR" "Rollback failed - application may be in broken state"
     }

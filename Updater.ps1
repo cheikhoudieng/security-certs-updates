@@ -372,7 +372,7 @@ function Start-AppProcess {
     try {
         $psi                  = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName         = $pythonPath
-        $psi.Arguments        =  + $mainPath + 
+        $psi.Arguments        = '"' + $mainPath + '"'
         $psi.WorkingDirectory = $ProjectDir
         $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $psi.CreateNoWindow   = $true
@@ -399,7 +399,7 @@ function Run-Setup {
         Write-Log "INFO" ("Running : " + $PYTHON_EXE + " " + $SETUP_SCRIPT)
         $psi                  = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName         = $pythonPath
-        $psi.Arguments        =  + $setupPath + 
+        $psi.Arguments        = '"' + $setupPath + '"'
         $psi.WorkingDirectory = $ProjectDir
         $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
         $psi.CreateNoWindow   = $true

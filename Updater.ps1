@@ -299,4 +299,3 @@ Set-Content -Path $LocalVerFile -Value $remoteVer -Encoding UTF8
 Write-Log "INFO" ("Version saved : " + $remoteVer)
 Write-Log "INFO" "====== UPDATE SUCCESS ======"
 exit 0
-

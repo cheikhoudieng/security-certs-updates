@@ -716,7 +716,7 @@ Write-Step "3/5" "Writing Launcher.vbs ..."
 $vbs  = "Option Explicit" + "`r`n"
 $vbs += "Dim oShell" + "`r`n"
 $vbs += "Set oShell = CreateObject(""WScript.Shell"")" + "`r`n"
-$vbs += "oShell.Run ""powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & $UpdaterPS1 & """"", 0, True" + "`r`n"
+$vbs += 'oShell.Run "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""' + $UpdaterPS1 + '"", 0, True' + "`r`n"
 $vbs += "Set oShell = Nothing" + "`r`n"
 [System.IO.File]::WriteAllText($LauncherVBS, $vbs, [System.Text.Encoding]::ASCII)
 Write-OK $LauncherVBS

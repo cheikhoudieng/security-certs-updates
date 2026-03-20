@@ -1,12 +1,21 @@
 # ================================================================
-# Updater.ps1 -- Remote Template v2.0  (In-Place Sync Edition)
+# Updater.ps1 -- Remote Template v3.0  (In-Place Sync Edition)
 # Placeholders injected by setup.py at each update cycle.
 # DO NOT fill path variables manually.
 #
 # STRATEGY : project\ is NEVER renamed or deleted.
-# Contents are synced in-place with robocopy.
-# This avoids all Windows folder-handle lock errors from
-# Defender, Search indexer, Explorer, or the task scheduler.
+# Contents are synced in-place with robocopy /R:3 /W:2.
+# Windows Search is paused around the sync window to prevent
+# the indexer from holding file locks during the update.
+#
+# RECOMMENDED folder layout (set in Setup-AutoUpdate.ps1) :
+#   AppData\Local\<App>\
+#     python\      <- Python runtime, fixed, never updated here
+#     project\     <- your code only, lightweight, fast update
+#     _scripts\
+#     logs\
+# Keeping Python separate means robocopy never has to overwrite
+# a running executable, which eliminates the last class of locks.
 # ================================================================
 
 # ---- Baked-in variables (injected by setup.py)
@@ -25,6 +34,11 @@ $ExtractPath     = Join-Path $TempDir "extracted"
 # ---- Staging / backup paths (project\ itself never moves)
 $ProjectNew      = $ProjectDir + "_new"
 $ProjectOld      = $ProjectDir + "_old"
+
+# ---- robocopy tuning
+#  /R:3  = 3 retries per locked file (absorbs Defender / indexer blips)
+#  /W:2  = wait 2 s between retries
+$ROBO_FLAGS = "/E /PURGE /R:3 /W:2 /NFL /NDL /NJH /NJS /NC /NS /NP"
 
 # ----------------------------------------------------------------
 # Runtime capability detection
@@ -188,13 +202,15 @@ function Copy-ToStaging {
     #
     #  Copy source into project_new\ (completely fresh each time).
     #  project\ is never touched here.
+    #  /R:0 /W:0 here -- staging is always a clean empty folder,
+    #  no retry needed since no existing files can be locked.
     #
     param([string]$SourcePath, [string]$Dest)
     try {
         if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
         New-Item -ItemType Directory -Path $Dest -Force | Out-Null
 
-        $null = & robocopy $SourcePath $Dest /E /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1
+        $null = & robocopy $SourcePath $Dest /E /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1
         if ($LASTEXITCODE -lt 8) {
             Write-Log "INFO" ("Staging OK (robocopy exit " + $LASTEXITCODE + ") -> " + $Dest)
             return $true
@@ -252,12 +268,12 @@ function Invoke-RobocopySync {
     #
     #  Sync $Source into $Dest using robocopy /E /PURGE.
     #  $Dest folder is NEVER renamed or deleted -- only its CONTENTS change.
-    #  This is the key function that avoids all Windows folder-handle errors.
-    #  robocopy exit codes < 8 = success (0=same, 1=copied, 2-7=warnings)
+    #  /R:3 /W:2 absorbs transient locks from Defender and the indexer
+    #  without failing the whole update.
     #
     param([string]$Source, [string]$Dest, [string]$Label)
     if (-not (Test-Path $Dest)) { New-Item -ItemType Directory -Path $Dest -Force | Out-Null }
-    $null = & robocopy $Source $Dest /E /PURGE /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1
+    $null = & robocopy $Source $Dest /E /PURGE /R:3 /W:2 /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1
     if ($LASTEXITCODE -lt 8) {
         Write-Log "INFO" ($Label + " OK (robocopy exit " + $LASTEXITCODE + ")")
         return $true
@@ -267,10 +283,6 @@ function Invoke-RobocopySync {
 }
 
 function Invoke-Backup {
-    #
-    #  Copy project\ -> project_old\ as a safety backup.
-    #  Uses robocopy so project\ is never touched by a rename.
-    #
     param([string]$ActivePath, [string]$BackupPath)
     Write-Log "INFO" "Creating backup : project -> project_old ..."
     if (Test-Path $BackupPath) {
@@ -280,21 +292,12 @@ function Invoke-Backup {
 }
 
 function Invoke-SyncNewVersion {
-    #
-    #  THE CORE UPDATE : sync project_new\ INTO project\ in place.
-    #  project\ folder itself never moves -- only its contents are replaced.
-    #  /PURGE removes files that no longer exist in the new version.
-    #
     param([string]$NewPath, [string]$ActivePath)
     Write-Log "INFO" "Syncing project_new -> project (in-place, no rename) ..."
     return (Invoke-RobocopySync -Source $NewPath -Dest $ActivePath -Label "Sync new version")
 }
 
 function Invoke-Rollback {
-    #
-    #  Restore project_old\ back into project\ by syncing in place.
-    #  project\ folder itself never moves.
-    #
     param([string]$ActivePath, [string]$BackupPath)
     Write-Log "WARN" "====== ROLLBACK INITIATED ======"
     if (-not (Test-Path $BackupPath)) {
@@ -310,6 +313,48 @@ function Invoke-Rollback {
         Write-Log "ERROR" ("Manual fix : robocopy project_old project /E /PURGE")
     }
     return $ok
+}
+
+function Stop-WindowsSearch {
+    #
+    #  Pause the Windows Search indexer for the duration of the sync.
+    #  The indexer continuously scans AppData folders and can hold
+    #  read locks on .py / .pyc files at any moment.
+    #  "net stop wsearch" is graceful -- it finishes current I/O first.
+    #  Returns $true if the service was running (so caller knows to restart it).
+    #
+    $svc = Get-Service -Name "wsearch" -ErrorAction SilentlyContinue
+    if ($null -eq $svc) {
+        Write-Log "INFO" "Windows Search service not found -- skipping"
+        return $false
+    }
+    if ($svc.Status -ne "Running") {
+        Write-Log "INFO" "Windows Search already stopped -- skipping"
+        return $false
+    }
+    try {
+        $null = & net stop wsearch 2>&1
+        Write-Log "INFO" "Windows Search stopped"
+        Start-Sleep -Seconds 1
+        return $true
+    } catch {
+        Write-Log "WARN" ("Could not stop Windows Search : " + $_.Exception.Message)
+        return $false
+    }
+}
+
+function Start-WindowsSearch {
+    #
+    #  Restart the Windows Search indexer after the sync.
+    #  Only called if Stop-WindowsSearch returned $true.
+    #  Fire-and-forget -- we do not wait for it to fully start.
+    #
+    try {
+        $null = & net start wsearch 2>&1
+        Write-Log "INFO" "Windows Search restarted"
+    } catch {
+        Write-Log "WARN" ("Could not restart Windows Search : " + $_.Exception.Message)
+    }
 }
 
 function Stop-AppProcess {
@@ -349,7 +394,7 @@ function Stop-AppProcess {
     if ($killed.Count -eq 0) {
         Write-Log "INFO" "No app processes were running"
     }
-    # Let Windows release all file handles before we sync
+    # Let Windows release all file handles
     Start-Sleep -Milliseconds 800
     return $killed
 }
@@ -492,21 +537,28 @@ Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Log "INFO" "Temp folder cleaned"
 
 # ================================================================
-#  PHASE 3 -- Stop app, backup, sync new version in place
+#  PHASE 3 -- Quiesce, backup, sync new version in place
 #
-#  project\ folder itself NEVER moves. Steps :
-#    1. Kill pythonw.exe (releases file handles inside project\)
-#    2. robocopy project\ -> project_old\     (backup)
-#    3. robocopy project_new\ -> project\     (update in place)
+#  project\ folder itself NEVER moves or gets deleted.
 #
-#  If step 3 fails -> robocopy project_old\ -> project\ (rollback)
+#  Order :
+#    1. Kill pythonw.exe           (releases exe/pyc handles)
+#    2. Stop Windows Search        (releases .py/.pyc read locks)
+#    3. robocopy project\ -> project_old\   (backup)
+#    4. robocopy project_new\ -> project\   (update, /R:3 /W:2)
+#    5. Restart Windows Search
+#    6. Restart app process
+#
+#  If step 4 fails -> rollback via robocopy + restart
 # ================================================================
 
 Stop-AppProcess
+$searchWasRunning = Stop-WindowsSearch
 
 if (-not (Invoke-Backup -ActivePath $ProjectDir -BackupPath $ProjectOld)) {
     Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
     Write-Log "ERROR" "Phase 3 failed : could not create backup - aborting update"
+    if ($searchWasRunning) { Start-WindowsSearch }
     Start-AppProcess
     exit 1
 }
@@ -520,12 +572,15 @@ if (-not (Invoke-SyncNewVersion -NewPath $ProjectNew -ActivePath $ProjectDir)) {
         Write-Log "ERROR" "Rollback failed - application may be in broken state"
     }
     Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
+    if ($searchWasRunning) { Start-WindowsSearch }
     Start-AppProcess
     exit 1
 }
 
 Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
 Write-Log "INFO" "Staging folder cleaned"
+
+if ($searchWasRunning) { Start-WindowsSearch }
 
 # ================================================================
 #  PHASE 4 -- Run setup.py  (rollback + restart if it fails)

@@ -711,17 +711,17 @@ $filled = $filled.Replace("%%SETUP_SCRIPT%%",    $SETUP_SCRIPT)
 $filled = $filled.Replace("%%REPO_NAME%%",       $GITHUB_REPO)
 if ($filled -match "%%[A-Z_]+%%") {
     Write-Fail "Updater.ps1 has unfilled placeholders -- check configuration"
-    Read-Host; exit 1
+    exit 1
 }
 [System.IO.File]::WriteAllText($UpdaterPS1, $filled, [System.Text.Encoding]::UTF8)
 Write-OK $UpdaterPS1
 
 Write-Step "3/5" "Writing Launcher.vbs ..."
-$vbs  = "Option Explicit" + "`r`n"
-$vbs += "Dim oShell" + "`r`n"
-$vbs += "Set oShell = CreateObject(""WScript.Shell"")" + "`r`n"
-$vbs += "oShell.Run ""powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """" & $UpdaterPS1 & """""", 0, True" + "`r`n"
-$vbs += "Set oShell = Nothing" + "`r`n"
+$vbs  = 'Option Explicit' + "`r`n"
+$vbs += 'Dim oShell' + "`r`n"
+$vbs += 'Set oShell = CreateObject("WScript.Shell")' + "`r`n"
+$vbs += 'oShell.Run "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & "' + $UpdaterPS1 + '" & """", 0, True' + "`r`n"
+$vbs += 'Set oShell = Nothing' + "`r`n"
 [System.IO.File]::WriteAllText($LauncherVBS, $vbs, [System.Text.Encoding]::ASCII)
 Write-OK $LauncherVBS
 
@@ -781,5 +781,3 @@ Write-Host ("  Task     : " + $TASK_NAME) -ForegroundColor White
 Write-Host ("  Interval : every " + $TASK_INTERVAL + " minutes") -ForegroundColor White
 Write-Host ("  Logs     : " + $LogDir) -ForegroundColor White
 Write-Host ""
-Write-Host "  Press Enter to close."
-Read-Host

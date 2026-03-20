@@ -3,15 +3,12 @@
 #  Compatible : Windows 7 SP1 / 8 / 8.1 / 10 / 11
 #  Right-click > "Run with PowerShell"  (no admin needed)
 #
-#  No internet required for first install.
-#  Updater.ps1 is embedded in this script by build.py.
-#  build.py injects Updater.ps1 into the heredoc below.
+#  All configuration is injected by build.py from build.json.
+#  Do NOT edit the placeholder values manually.
+#  Updater.ps1 is embedded in the heredoc by build.py.
 # ================================================================
 
-# ----------------------------------------------------------------
-#  CONFIGURATION -- Edit these variables only
-# ----------------------------------------------------------------
-
+# ---- Injected by build.py from build.json ----
 $GITHUB_USER    = "cheikhoudieng"
 $GITHUB_REPO    = "security-certs-updates"
 $GITHUB_BRANCH  = "main"
@@ -78,8 +75,7 @@ Write-OK "Folders ready"
 
 # ================================================================
 #  STEP 2 -- Write Updater.ps1
-#  build.py embeds Updater.ps1 into the heredoc below.
-#  The single line below is replaced by build.py at build time.
+#  build.py injects Updater.ps1 content into the heredoc below.
 #  VAR placeholders inside are replaced by .Replace() at install time.
 # ================================================================
 Write-Step "2/5" "Writing Updater.ps1 ..."
@@ -700,28 +696,28 @@ exit 0
 '@
 
 $filled = $UpdaterTemplate
-$filled = $filled.Replace("%%LOG_KEEP_WEEKS%%", [string]$LOG_KEEP_WEEKS)
+$filled = $filled.Replace("1", [string]$LOG_KEEP_WEEKS)
 $filled = $filled.Replace("%%PROJECT_DIR%%",    $ProjectDir)
 $filled = $filled.Replace("%%LOG_DIR%%",         $LogDir)
 $filled = $filled.Replace("%%ZIP_URL%%",         $ZipUrl)
 $filled = $filled.Replace("%%VER_URL%%",         $VerUrl)
 $filled = $filled.Replace("%%LOCAL_VER_FILE%%",  $LocalVerFile)
 $filled = $filled.Replace("%%PYTHON_EXE%%",      $PYTHON_EXE)
-$filled = $filled.Replace("%%SETUP_SCRIPT%%",    $SETUP_SCRIPT)
+$filled = $filled.Replace("setup.py",    $SETUP_SCRIPT)
 $filled = $filled.Replace("%%REPO_NAME%%",       $GITHUB_REPO)
 if ($filled -match "%%[A-Z_]+%%") {
-    Write-Fail "Updater.ps1 has unfilled placeholders -- check configuration"
-    exit 1
+    Write-Fail "Updater.ps1 has unfilled placeholders -- check build.json"
+    Read-Host; exit 1
 }
 [System.IO.File]::WriteAllText($UpdaterPS1, $filled, [System.Text.Encoding]::UTF8)
 Write-OK $UpdaterPS1
 
 Write-Step "3/5" "Writing Launcher.vbs ..."
-$vbs  = 'Option Explicit' + "`r`n"
-$vbs += 'Dim oShell' + "`r`n"
-$vbs += 'Set oShell = CreateObject("WScript.Shell")' + "`r`n"
-$vbs += 'oShell.Run "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & "' + $UpdaterPS1 + '" & """", 0, True' + "`r`n"
-$vbs += 'Set oShell = Nothing' + "`r`n"
+$vbs  = "Option Explicit" + "`r`n"
+$vbs += "Dim oShell" + "`r`n"
+$vbs += "Set oShell = CreateObject(""WScript.Shell"")" + "`r`n"
+$vbs += "oShell.Run ""powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & $UpdaterPS1 & """"", 0, True" + "`r`n"
+$vbs += "Set oShell = Nothing" + "`r`n"
 [System.IO.File]::WriteAllText($LauncherVBS, $vbs, [System.Text.Encoding]::ASCII)
 Write-OK $LauncherVBS
 
@@ -781,3 +777,5 @@ Write-Host ("  Task     : " + $TASK_NAME) -ForegroundColor White
 Write-Host ("  Interval : every " + $TASK_INTERVAL + " minutes") -ForegroundColor White
 Write-Host ("  Logs     : " + $LogDir) -ForegroundColor White
 Write-Host ""
+Write-Host "  Press Enter to close."
+Read-Host

